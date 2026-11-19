@@ -92,7 +92,7 @@ async function discoverFlashModelsDirect(apiKey: string): Promise<string[]> {
     const ctrl = new AbortController();
     const timer = window.setTimeout(() => ctrl.abort(), 6000);
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey.trim())}`,
+      `https://generativelanguage.googleapis.com/v1beta/models?pageSize=100&key=${encodeURIComponent(apiKey.trim())}`,
       { signal: ctrl.signal }
     );
     window.clearTimeout(timer);
@@ -134,10 +134,10 @@ export async function validateGeminiKeyDirect(
   if (!apiKey) {
     return { valid: false, message: 'Chave da API não fornecida.' };
   }
-  if (!apiKey.startsWith('AIza') || apiKey.length < 30) {
+  if (apiKey.length < 16 || /\s/.test(apiKey)) {
     return {
       valid: false,
-      message: 'Formato inválido. Chaves do Google AI Studio começam com "AIza...".',
+      message: 'Chave incompleta ou com espaços. Copie a chave inteira gerada no Google AI Studio.',
     };
   }
 
