@@ -740,11 +740,18 @@ function rankAndFilterGeminiModels(rawModels: any[]): string[] {
   return deduped;
 }
 
+const DEFAULT_SERVER_FALLBACK_MODELS = [
+  'gemini-4-hydrogen',
+  'gemini-3.8-flash',
+  'gemini-3.1-flash-lite',
+  'gemini-3-flash',
+];
+
 async function discoverAvailableGeminiModels(apiKey: string): Promise<string[]> {
   const cacheKey = hashApiKey(apiKey);
   const cached = discoveredModelsCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < 10 * 60 * 1000 && cached.models.length > 0) {
-    return cached.models.slice(0, 2);
+    return cached.models.slice(0, 4);
   }
 
   try {
@@ -762,15 +769,15 @@ async function discoverAvailableGeminiModels(apiKey: string): Promise<string[]> 
       const ranked = rankAndFilterGeminiModels(data?.models || []);
       if (ranked.length > 0) {
         discoveredModelsCache.set(cacheKey, { models: ranked, fetchedAt: Date.now() });
-        console.log('[FrancoDroid AI] Modelos rápidos descobertos:', ranked.slice(0, 2));
-        return ranked.slice(0, 2);
+        console.log('[FrancoDroid AI] Modelos rápidos descobertos:', ranked.slice(0, 4));
+        return ranked.slice(0, 4);
       }
     }
   } catch (err: any) {
     console.warn('[FrancoDroid AI] Aviso ao listar modelos:', err?.message || err);
   }
 
-  return ['gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+  return [...DEFAULT_SERVER_FALLBACK_MODELS];
 }
 
 app.post('/api/ai/validate-key', async (req: Request, res: Response): Promise<void> => {
@@ -1157,23 +1164,85 @@ function sanitizeAnalysisOutput(
   };
 }
 
-function formatFriendlyGeminiError(err: any): string {
-  const msg = String(err?.message || err || '');
-  const lower = msg.toLowerCase();
+function extractGeminiRawErrorText(err: any): string {
+  const raw = typeof err === 'string' ? err : String(err?.message || err || '');
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{') || trimmed.includes('"error"')) {
+    try {
+      const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed?.error?.message) {
+          const code = parsed.error.code ? `[${parsed.error.code}] ` : '';
+          const status = parsed.error.status ? ` (${parsed.error.status})` : '';
+          return `${code}${parsed.error.message}${status}`;
+        }
+      }
+    } catch {
+      // keep raw message
+    }
+  }
+  return raw;
+}
 
-  if (lower.includes('api_key_invalid') || lower.includes('permission_denied') || msg.includes('401') || msg.includes('403')) {
+function isTransientServerOverload(err: any): boolean {
+  const text = extractGeminiRawErrorText(err).toLowerCase();
+  const status = Number(err?.status || err?.code || 0);
+  return (
+    status === 503 ||
+    status === 429 ||
+    status === 502 ||
+    status === 504 ||
+    text.includes('503') ||
+    text.includes('unavailable') ||
+    text.includes('high demand') ||
+    text.includes('overloaded') ||
+    text.includes('try again later') ||
+    text.includes('temporarily') ||
+    text.includes('resource_exhausted') ||
+    text.includes('429') ||
+    text.includes('tempo limite')
+  );
+}
+
+function formatFriendlyGeminiError(err: any): string {
+  const extracted = extractGeminiRawErrorText(err);
+  const lower = extracted.toLowerCase();
+
+  if (
+    lower.includes('api_key_invalid') ||
+    lower.includes('permission_denied') ||
+    lower.includes('[401]') ||
+    lower.includes('[403]')
+  ) {
     return 'Sua chave da API Gemini parece inválida ou sem permissão. Verifique-a na aba "Configurar IA".';
   }
-  if (lower.includes('resource_exhausted') || msg.includes('429') || lower.includes('quota')) {
+  if (
+    lower.includes('503') ||
+    lower.includes('unavailable') ||
+    lower.includes('high demand') ||
+    lower.includes('overloaded')
+  ) {
+    return 'Os servidores do Gemini estão com pico temporário de acesso (erro 503 — alta demanda). Tentamos automaticamente os modelos alternativos, mas todos estão ocupados agora. Aguarde ~15–30 segundos e clique em Analisar novamente.';
+  }
+  if (lower.includes('resource_exhausted') || lower.includes('429') || lower.includes('quota')) {
     return 'Cota gratuita da API Gemini temporariamente atingida. Aguarde ~20 segundos ou corte o trecho para usar menos tokens.';
   }
-  if (lower.includes('payload size exceeds') || lower.includes('token count') || lower.includes('too large') || msg.includes('413')) {
+  if (
+    lower.includes('payload size exceeds') ||
+    lower.includes('token count') ||
+    lower.includes('too large') ||
+    lower.includes('413')
+  ) {
     return 'Os dados enviados (vídeo + fotos do gabarito) excederam o limite de tokens da API gratuita. Tente informar as missões feitas ou cortar um trecho menor.';
   }
-  if (lower.includes('tempo limite')) {
-    return msg;
+  if (lower.includes('404') || lower.includes('not_found')) {
+    return 'O modelo selecionado não está disponível na sua conta Gemini no momento. Tente novamente em instantes.';
   }
-  return msg || 'Falha ao processar análise com a IA.';
+  if (lower.includes('tempo limite')) {
+    return extracted;
+  }
+  return extracted || 'Falha ao processar análise com a IA.';
 }
 
 // ==================== MULTI-PART RESULT MERGER ====================
@@ -1496,7 +1565,7 @@ DETALHES CRÍTICOS:
       };
     };
 
-    // Helper: run Gemini inference with fast timeouts, pinned model support, and clean 400 fallback
+    // Helper: run Gemini inference with fast timeouts, multi-model 503 failover, and clean 400 fallback
     const runGeminiOnMediaPart = async (
       mediaPart: any,
       promptText: string,
@@ -1513,24 +1582,29 @@ DETALHES CRÍTICOS:
       ];
 
       const discovered = await discoverAvailableGeminiModels(params.apiKey);
-      const modelsToTry = options.pinnedModel
-        ? [options.pinnedModel, ...discovered.filter((m) => m !== options.pinnedModel)].slice(0, 2)
+      const candidatePool = options.pinnedModel
+        ? [options.pinnedModel, ...discovered.filter((m) => m !== options.pinnedModel)]
         : discovered;
+      const baseModels = Array.from(new Set(candidatePool)).slice(0, 4);
 
       const perModelTimeoutMs = options.isMultiPart ? 38000 : 50000;
       let lastError: any = null;
       const attemptErrors: string[] = [];
+      let sawTransient503 = false;
 
-      for (let i = 0; i < modelsToTry.length; i++) {
+      const tryServerModel = async (
+        modelCandidate: string,
+        pct: number,
+        statusMessage: string
+      ): Promise<{ parsedData: any; successfulModel: string }> => {
         if (analysisJobs.get(jobId)?.stage === 'cancelled') {
           throw new Error('ABORTED');
         }
 
-        const modelCandidate = modelsToTry[i];
         updateJob({
           stage: 'analyzing_ai',
-          progress: Math.min(95, progressBase + i * 2),
-          message: `${stepPrefix} (${modelCandidate})...`,
+          progress: Math.min(96, pct),
+          message: statusMessage,
         });
 
         const buildRequestConfig = (includeAdvancedParams: boolean) => {
@@ -1591,51 +1665,113 @@ DETALHES CRÍTICOS:
           return cfg;
         };
 
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `Tempo limite (${Math.round(perModelTimeoutMs / 1000)}s) no modelo ${modelCandidate}`
+                )
+              ),
+            perModelTimeoutMs
+          )
+        );
+
+        let response: any;
         try {
-          const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(
-              () => reject(new Error(`Tempo limite (${Math.round(perModelTimeoutMs / 1000)}s) no modelo ${modelCandidate}`)),
-              perModelTimeoutMs
-            )
+          const generatePromise = aiClient.models.generateContent({
+            model: modelCandidate,
+            contents: { parts: multimodalParts },
+            config: buildRequestConfig(true),
+          });
+          response = await Promise.race([generatePromise, timeoutPromise]);
+        } catch (firstErr: any) {
+          const firstMsg = String(firstErr?.message || '');
+          const isArgError =
+            firstMsg.includes('INVALID_ARGUMENT') ||
+            firstMsg.includes('400') ||
+            firstMsg.toLowerCase().includes('thinking') ||
+            firstMsg.toLowerCase().includes('mediaresolution');
+
+          if (!isArgError) throw firstErr;
+
+          const retryPromise = aiClient.models.generateContent({
+            model: modelCandidate,
+            contents: { parts: multimodalParts },
+            config: buildRequestConfig(false),
+          });
+          response = await Promise.race([retryPromise, timeoutPromise]);
+        }
+
+        const rawJson = (response.text ?? '{}').trim();
+        const parsedData = JSON.parse(rawJson);
+        console.log(`[FrancoDroid AI] Sucesso (${stepPrefix}) com ${modelCandidate}!`);
+        return { parsedData, successfulModel: modelCandidate };
+      };
+
+      for (let i = 0; i < baseModels.length; i++) {
+        if (analysisJobs.get(jobId)?.stage === 'cancelled') {
+          throw new Error('ABORTED');
+        }
+        const modelCandidate = baseModels[i];
+        try {
+          return await tryServerModel(
+            modelCandidate,
+            progressBase + i * 2,
+            `${stepPrefix} (${modelCandidate})...`
           );
-
-          let response: any;
-          try {
-            const generatePromise = aiClient.models.generateContent({
-              model: modelCandidate,
-              contents: { parts: multimodalParts },
-              config: buildRequestConfig(true),
-            });
-            response = await Promise.race([generatePromise, timeoutPromise]);
-          } catch (firstErr: any) {
-            const firstMsg = String(firstErr?.message || '');
-            const isArgError =
-              firstMsg.includes('INVALID_ARGUMENT') ||
-              firstMsg.includes('400') ||
-              firstMsg.toLowerCase().includes('thinking') ||
-              firstMsg.toLowerCase().includes('mediaresolution');
-
-            if (!isArgError) throw firstErr;
-
-            const retryPromise = aiClient.models.generateContent({
-              model: modelCandidate,
-              contents: { parts: multimodalParts },
-              config: buildRequestConfig(false),
-            });
-            response = await Promise.race([retryPromise, timeoutPromise]);
-          }
-
-          const rawJson = (response.text ?? '{}').trim();
-          const parsedData = JSON.parse(rawJson);
-          console.log(`[FrancoDroid AI] Sucesso (${stepPrefix}) com ${modelCandidate}!`);
-          return { parsedData, successfulModel: modelCandidate };
         } catch (err: any) {
           lastError = err;
-          const msg = String(err?.message || err || '');
+          const msg = extractGeminiRawErrorText(err);
           attemptErrors.push(`${modelCandidate}: ${msg}`);
           console.warn(`[FrancoDroid AI] Falha (${stepPrefix}) ${modelCandidate}:`, msg);
           if (msg.includes('API_KEY_INVALID') || msg.includes('PERMISSION_DENIED')) {
             break;
+          }
+          if (isTransientServerOverload(err)) {
+            sawTransient503 = true;
+            if (i < baseModels.length - 1) {
+              updateJob({
+                stage: 'analyzing_ai',
+                progress: Math.min(95, progressBase + i * 2 + 1),
+                message: `Modelo ${modelCandidate} ocupado (503) — alternando para ${baseModels[i + 1]}...`,
+              });
+              await new Promise((r) => setTimeout(r, 1200));
+            }
+          }
+        }
+      }
+
+      if (sawTransient503 && analysisJobs.get(jobId)?.stage !== 'cancelled') {
+        const retryQueue = [...baseModels]
+          .sort((a, b) => (a.includes('lite') ? 0 : 1) - (b.includes('lite') ? 0 : 1))
+          .slice(0, 2);
+
+        updateJob({
+          stage: 'analyzing_ai',
+          progress: Math.min(95, progressBase + 4),
+          message: 'Servidores Gemini com pico temporário (503). Aguardando 2,5s para nova tentativa...',
+        });
+        await new Promise((r) => setTimeout(r, 2500));
+
+        for (let j = 0; j < retryQueue.length; j++) {
+          if (analysisJobs.get(jobId)?.stage === 'cancelled') {
+            throw new Error('ABORTED');
+          }
+          const retryModel = retryQueue[j];
+          try {
+            return await tryServerModel(
+              retryModel,
+              progressBase + 6 + j,
+              `Tentando novamente (${retryModel})...`
+            );
+          } catch (retryErr: any) {
+            lastError = retryErr;
+            const retryMsg = extractGeminiRawErrorText(retryErr);
+            attemptErrors.push(`${retryModel} (retry): ${retryMsg}`);
+            if (j < retryQueue.length - 1 && isTransientServerOverload(retryErr)) {
+              await new Promise((r) => setTimeout(r, 1400));
+            }
           }
         }
       }

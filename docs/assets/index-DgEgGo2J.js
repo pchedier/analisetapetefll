@@ -35551,7 +35551,13 @@ var PREFERRED_MODEL_ORDER = [
 	"gemini-4-hydrogen",
 	"gemini-3.8-flash",
 	"gemini-3.1-flash-lite",
-	"gemini-3-flash-preview",
+	"gemini-3-flash",
+	"gemini-3-flash-preview"
+];
+var DEFAULT_FALLBACK_MODELS = [
+	"gemini-4-hydrogen",
+	"gemini-3.8-flash",
+	"gemini-3.1-flash-lite",
 	"gemini-3-flash"
 ];
 function scoreModelRank(name) {
@@ -35561,13 +35567,45 @@ function scoreModelRank(name) {
 	if (name.includes("flash")) return 20;
 	return 60;
 }
+function extractGeminiErrorText(err) {
+	const raw = typeof err === "string" ? err : String(err?.message || err || "");
+	const trimmed = raw.trim();
+	if (trimmed.startsWith("{") || trimmed.includes("\"error\"")) try {
+		const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+		if (jsonMatch) {
+			const parsed = JSON.parse(jsonMatch[0]);
+			if (parsed?.error?.message) {
+				const code = parsed.error.code ? `[${parsed.error.code}] ` : "";
+				const status = parsed.error.status ? ` (${parsed.error.status})` : "";
+				return `${code}${parsed.error.message}${status}`;
+			}
+		}
+	} catch {}
+	return raw;
+}
+function isTransientOverloadError(err) {
+	const text = extractGeminiErrorText(err).toLowerCase();
+	const status = Number(err?.status || err?.code || 0);
+	return status === 503 || status === 429 || status === 502 || status === 504 || text.includes("503") || text.includes("unavailable") || text.includes("high demand") || text.includes("overloaded") || text.includes("try again later") || text.includes("temporarily") || text.includes("resource_exhausted") || text.includes("429") || text.includes("tempo limite");
+}
+function formatClientGeminiError(err) {
+	const extracted = extractGeminiErrorText(err);
+	const lower = extracted.toLowerCase();
+	if (lower.includes("api_key_invalid") || lower.includes("permission_denied") || lower.includes("[401]") || lower.includes("[403]")) return "Sua chave da API Gemini parece inválida ou sem permissão. Verifique-a na aba \"Configurar IA\".";
+	if (lower.includes("503") || lower.includes("unavailable") || lower.includes("high demand") || lower.includes("overloaded")) return "Os servidores do Gemini estão com pico temporário de acesso (erro 503 — alta demanda). Tentamos automaticamente os modelos alternativos, mas todos estão ocupados agora. Aguarde ~15–30 segundos e clique em Analisar novamente.";
+	if (lower.includes("resource_exhausted") || lower.includes("429") || lower.includes("quota")) return "Cota gratuita da API Gemini temporariamente atingida. Aguarde ~20 segundos ou use \"Dividir em Partes\" / corte um trecho menor.";
+	if (lower.includes("payload size exceeds") || lower.includes("token count") || lower.includes("too large") || lower.includes("413")) return "Os dados enviados (vídeo + fotos do gabarito) excederam o limite da API gratuita. Tente informar as missões feitas ou cortar um trecho menor.";
+	if (lower.includes("404") || lower.includes("not_found")) return "O modelo selecionado não está disponível na sua conta Gemini no momento. Tente novamente em instantes.";
+	if (lower.includes("tempo limite")) return extracted;
+	return extracted || "Falha ao processar análise com a IA Gemini.";
+}
 async function discoverFlashModelsDirect(apiKey) {
 	try {
 		const ctrl = new AbortController();
 		const timer = window.setTimeout(() => ctrl.abort(), 6e3);
 		const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?pageSize=100&key=${encodeURIComponent(apiKey.trim())}`, { signal: ctrl.signal });
 		window.clearTimeout(timer);
-		if (!res.ok) return [...PREFERRED_MODEL_ORDER].slice(0, 2);
+		if (!res.ok) return [...DEFAULT_FALLBACK_MODELS];
 		const data = await res.json();
 		const valid = (Array.isArray(data?.models) ? data.models : []).filter((m) => {
 			if (!(Array.isArray(m?.supportedGenerationMethods) ? m.supportedGenerationMethods : []).includes("generateContent")) return false;
@@ -35576,9 +35614,9 @@ async function discoverFlashModelsDirect(apiKey) {
 			return !EXCLUDED_MODEL_KEYWORDS.some((kw) => shortName.includes(kw));
 		}).map((m) => String(m.name).replace(/^models\//, ""));
 		const ranked = Array.from(new Set(valid)).sort((a, b) => scoreModelRank(a) - scoreModelRank(b));
-		return ranked.length > 0 ? ranked.slice(0, 2) : ["gemini-4-hydrogen", "gemini-3.8-flash"];
+		return ranked.length > 0 ? ranked.slice(0, 4) : [...DEFAULT_FALLBACK_MODELS];
 	} catch {
-		return ["gemini-4-hydrogen", "gemini-3.8-flash"];
+		return [...DEFAULT_FALLBACK_MODELS];
 	}
 }
 async function validateGeminiKeyDirect(rawKey) {
@@ -35607,6 +35645,11 @@ async function validateGeminiKeyDirect(rawKey) {
 			valid: true,
 			quotaWarning: true,
 			message: "Chave conectada! (A cota gratuita está momentaneamente cheia, aguarde ~20s se ocorrer erro ao analisar)."
+		};
+		if (resp.status === 503 || lower.includes("unavailable") || lower.includes("high demand")) return {
+			valid: true,
+			quotaWarning: true,
+			message: "Chave reconhecida! (Servidor do Google com pico temporário de acesso 503 — tente analisar em alguns segundos)."
 		};
 		if (resp.status === 400 || resp.status === 401 || resp.status === 403 || lower.includes("api_key_invalid")) return {
 			valid: false,
@@ -35950,7 +35993,8 @@ DETALHES CRÍTICOS:
 	const aiClient = new GoogleGenAI({ apiKey });
 	const discoveredModels = await discoverFlashModelsDirect(apiKey);
 	const runGeminiDirect = async (mediaParts, promptText, progressPct, stepLabel, opts = {}) => {
-		const modelsToTry = opts.pinnedModel ? [opts.pinnedModel, ...discoveredModels.filter((m) => m !== opts.pinnedModel)].slice(0, 2) : discoveredModels;
+		const candidatePool = opts.pinnedModel ? [opts.pinnedModel, ...discoveredModels.filter((m) => m !== opts.pinnedModel)] : discoveredModels;
+		const baseModels = Array.from(new Set(candidatePool)).slice(0, 4);
 		const multimodalParts = [
 			...referenceParts,
 			...trainingParts,
@@ -35960,10 +36004,9 @@ DETALHES CRÍTICOS:
 		];
 		const perModelTimeoutMs = opts.isMultiPart ? 4e4 : 52e3;
 		let lastErr = null;
-		for (let i = 0; i < modelsToTry.length; i++) {
-			if (signal?.aborted) throw new Error("ABORTED");
-			const modelCandidate = modelsToTry[i];
-			onProgress(Math.min(95, progressPct + i * 2), `${stepLabel} (${modelCandidate})...`);
+		let sawTransient503 = false;
+		const trySingleModel = async (modelCandidate, pct, label) => {
+			onProgress(Math.min(96, pct), label);
 			const buildCfg = (includeAdvanced) => {
 				const cfg = {
 					systemInstruction: `Você é um árbitro rigoroso da FLL (BIOGLOW). Retorne estritamente JSON válido. Nunca invente missões não executadas no vídeo. Códigos permitidos: [${allowedCodesList.join(", ")}].`,
@@ -36023,35 +36066,64 @@ DETALHES CRÍTICOS:
 				}
 				return cfg;
 			};
+			const timeoutPromise = new Promise((_, reject) => window.setTimeout(() => reject(/* @__PURE__ */ new Error(`Tempo limite (${Math.round(perModelTimeoutMs / 1e3)}s) no modelo ${modelCandidate}`)), perModelTimeoutMs));
+			let response;
 			try {
-				const timeoutPromise = new Promise((_, reject) => window.setTimeout(() => reject(/* @__PURE__ */ new Error(`Tempo limite (${Math.round(perModelTimeoutMs / 1e3)}s) no modelo ${modelCandidate}`)), perModelTimeoutMs));
-				let response;
-				try {
-					response = await Promise.race([aiClient.models.generateContent({
-						model: modelCandidate,
-						contents: { parts: multimodalParts },
-						config: buildCfg(true)
-					}), timeoutPromise]);
-				} catch (firstErr) {
-					const msg = String(firstErr?.message || "");
-					if (msg.includes("INVALID_ARGUMENT") || msg.includes("400") || msg.toLowerCase().includes("thinking") || msg.toLowerCase().includes("mediaresolution")) response = await Promise.race([aiClient.models.generateContent({
-						model: modelCandidate,
-						contents: { parts: multimodalParts },
-						config: buildCfg(false)
-					}), timeoutPromise]);
-					else throw firstErr;
-				}
-				return {
-					parsedData: JSON.parse((response.text ?? "{}").trim()),
-					successfulModel: modelCandidate
-				};
+				response = await Promise.race([aiClient.models.generateContent({
+					model: modelCandidate,
+					contents: { parts: multimodalParts },
+					config: buildCfg(true)
+				}), timeoutPromise]);
+			} catch (firstErr) {
+				const msg = String(firstErr?.message || "");
+				if (msg.includes("INVALID_ARGUMENT") || msg.includes("400") || msg.toLowerCase().includes("thinking") || msg.toLowerCase().includes("mediaresolution")) response = await Promise.race([aiClient.models.generateContent({
+					model: modelCandidate,
+					contents: { parts: multimodalParts },
+					config: buildCfg(false)
+				}), timeoutPromise]);
+				else throw firstErr;
+			}
+			return {
+				parsedData: JSON.parse((response.text ?? "{}").trim()),
+				successfulModel: modelCandidate
+			};
+		};
+		for (let i = 0; i < baseModels.length; i++) {
+			if (signal?.aborted) throw new Error("ABORTED");
+			const modelCandidate = baseModels[i];
+			try {
+				return await trySingleModel(modelCandidate, progressPct + i * 2, `${stepLabel} (${modelCandidate})...`);
 			} catch (err) {
 				lastErr = err;
-				const msg = String(err?.message || "");
-				if (msg.includes("API_KEY_INVALID") || msg.includes("PERMISSION_DENIED")) break;
+				const rawMsg = extractGeminiErrorText(err);
+				if (rawMsg.includes("API_KEY_INVALID") || rawMsg.includes("PERMISSION_DENIED")) break;
+				if (isTransientOverloadError(err)) {
+					sawTransient503 = true;
+					if (i < baseModels.length - 1) {
+						onProgress(Math.min(95, progressPct + i * 2 + 1), `Modelo ${modelCandidate} ocupado (503) — alternando para ${baseModels[i + 1]}...`);
+						await new Promise((r) => window.setTimeout(r, 1200));
+					}
+				}
 			}
 		}
-		throw lastErr || /* @__PURE__ */ new Error("Falha ao analisar mídia na API Gemini.");
+		if (sawTransient503 && !signal?.aborted) {
+			const retryQueue = [...baseModels].sort((a, b) => {
+				return (a.includes("lite") ? 0 : 1) - (b.includes("lite") ? 0 : 1);
+			}).slice(0, 2);
+			onProgress(Math.min(95, progressPct + 4), "Servidores Gemini com pico temporário (503). Aguardando 2,5s para nova tentativa...");
+			await new Promise((r) => window.setTimeout(r, 2500));
+			for (let j = 0; j < retryQueue.length; j++) {
+				if (signal?.aborted) throw new Error("ABORTED");
+				const retryModel = retryQueue[j];
+				try {
+					return await trySingleModel(retryModel, progressPct + 6 + j, `Tentando novamente (${retryModel})...`);
+				} catch (retryErr) {
+					lastErr = retryErr;
+					if (j < retryQueue.length - 1 && isTransientOverloadError(retryErr)) await new Promise((r) => window.setTimeout(r, 1400));
+				}
+			}
+		}
+		throw new Error(formatClientGeminiError(lastErr));
 	};
 	const allowedSanitizeList = activeMissions.map((m) => ({
 		code: m.code,
@@ -36147,9 +36219,8 @@ DETALHES CRÍTICOS:
 			});
 		} else if (!batchErr) batchErr = outcome.reason;
 		if (batchErr) {
-			const msg = String(batchErr?.message || "");
-			if (msg === "ABORTED") throw batchErr;
-			partialWarning = `Partes analisadas: ${partResults.length}/${segments.length}. Uma parte seguinte atingiu limite da API (${msg.slice(0, 120)}). Resultado parcial mantido.`;
+			if (String(batchErr?.message || "") === "ABORTED") throw batchErr;
+			partialWarning = `Partes analisadas: ${partResults.length}/${segments.length}. Uma parte seguinte foi interrompida: ${formatClientGeminiError(batchErr)}`;
 			break;
 		}
 	}
@@ -36752,7 +36823,7 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 		} catch (err) {
 			if (err instanceof Error && (err.message === "ABORTED" || err.name === "AbortError")) return;
 			console.error(err);
-			const msg = err instanceof Error ? err.message : "Falha na comunicação com o servidor de IA.";
+			const msg = formatClientGeminiError(err instanceof Error ? err.message : "Falha na comunicação com o servidor de IA.");
 			setLastErrorMsg(msg);
 			onShowToast(msg, "error");
 		} finally {

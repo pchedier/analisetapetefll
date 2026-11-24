@@ -45,7 +45,11 @@ import { Round, MissionResult, MissionStatus, AiTrainingExample } from '../types
 import { BIOGLOW_OFFICIAL_MISSIONS } from '../data/bioglowMissions';
 import { TEAM_DRIVE_GABARITO_URL } from '../data/teamConfig';
 import { validateMissionReference } from '../utils/folderParser';
-import { analyzeMediaClientSide, hasBackendServer } from '../services/clientAiEngine';
+import {
+  analyzeMediaClientSide,
+  formatClientGeminiError,
+  hasBackendServer,
+} from '../services/clientAiEngine';
 
 interface SimpleVideoAnalysisViewProps {
   references: Record<string, FolderMissionReference>;
@@ -963,8 +967,9 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
         return;
       }
       console.error(err);
-      const msg =
+      const rawMsg =
         err instanceof Error ? err.message : 'Falha na comunicação com o servidor de IA.';
+      const msg = formatClientGeminiError(rawMsg);
       setLastErrorMsg(msg);
       onShowToast(msg, 'error');
     } finally {
