@@ -12408,6 +12408,19 @@ var ShieldAlert = createLucideIcon("shield-alert", [
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var ShieldCheck = createLucideIcon("shield-check", [["path", {
+	d: "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
+	key: "oel41y"
+}], ["path", {
+	d: "m9 12 2 2 4-4",
+	key: "dzmm74"
+}]]);
+/**
+* @license lucide-react v0.546.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var Sparkles = createLucideIcon("sparkles", [
 	["path", {
 		d: "M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z",
@@ -12608,6 +12621,16 @@ var X$1 = createLucideIcon("x", [["path", {
 }], ["path", {
 	d: "m6 6 12 12",
 	key: "d8bk6v"
+}]]);
+/**
+* @license lucide-react v0.546.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
+var Zap = createLucideIcon("zap", [["path", {
+	d: "M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z",
+	key: "1xq2db"
 }]]);
 // node_modules/react/cjs/react-jsx-runtime.production.js
 /**
@@ -35518,6 +35541,72 @@ async function hasBackendServer(forceRefresh = false) {
 	})();
 	return backendAvailablePromise;
 }
+var GROQ_API_KEY_STORAGE_KEY = "francodroid_user_groq_api_key";
+var OPENROUTER_API_KEY_STORAGE_KEY = "francodroid_user_openrouter_api_key";
+var AI_PROVIDER_PREF_KEY = "francodroid_ai_provider_pref";
+var PREFERRED_GEMINI_MODEL_KEY = "francodroid_preferred_gemini_model";
+var SELECTABLE_GEMINI_MODELS = [
+	{
+		id: "auto",
+		label: "Automático (Alterna modelos se der 503)"
+	},
+	{
+		id: "gemini-3.1-flash-lite",
+		label: "Gemini 3.1 Flash-Lite (Mais leve / Menos 503)"
+	},
+	{
+		id: "gemini-3.8-flash",
+		label: "Gemini 3.8 Flash (Rápido)"
+	},
+	{
+		id: "gemini-4-hydrogen",
+		label: "Gemini 4 Hydrogen (Padrão)"
+	},
+	{
+		id: "gemma-3-27b-it",
+		label: "Gemma 3 27B (Servidor alternativo Google)"
+	},
+	{
+		id: "gemini-2.5-flash",
+		label: "Gemini 2.5 Flash (Legado se liberado)"
+	}
+];
+function hasAnyConfiguredAiProvider() {
+	if (typeof window === "undefined") return false;
+	try {
+		return Boolean((localStorage.getItem("francodroid_user_gemini_api_key") || "").trim() || (localStorage.getItem("francodroid_user_groq_api_key") || "").trim() || (localStorage.getItem("francodroid_user_openrouter_api_key") || "").trim());
+	} catch {
+		return false;
+	}
+}
+function getSavedProviderConfig() {
+	if (typeof window === "undefined") return {
+		geminiKey: "",
+		groqKey: "",
+		openRouterKey: "",
+		providerPref: "auto",
+		preferredGeminiModel: "auto"
+	};
+	try {
+		const prefRaw = localStorage.getItem("francodroid_ai_provider_pref") || "auto";
+		const providerPref = prefRaw === "gemini" || prefRaw === "groq" || prefRaw === "openrouter" ? prefRaw : "auto";
+		return {
+			geminiKey: (localStorage.getItem("francodroid_user_gemini_api_key") || "").trim(),
+			groqKey: (localStorage.getItem("francodroid_user_groq_api_key") || "").trim(),
+			openRouterKey: (localStorage.getItem("francodroid_user_openrouter_api_key") || "").trim(),
+			providerPref,
+			preferredGeminiModel: (localStorage.getItem("francodroid_preferred_gemini_model") || "auto").trim() || "auto"
+		};
+	} catch {
+		return {
+			geminiKey: "",
+			groqKey: "",
+			openRouterKey: "",
+			providerPref: "auto",
+			preferredGeminiModel: "auto"
+		};
+	}
+}
 var EXCLUDED_MODEL_KEYWORDS = [
 	"embedding",
 	"tts",
@@ -35532,7 +35621,6 @@ var EXCLUDED_MODEL_KEYWORDS = [
 	"deep-research",
 	"robotics",
 	"computer-use",
-	"gemma",
 	"learnlm",
 	"aqa",
 	"bison",
@@ -35540,7 +35628,6 @@ var EXCLUDED_MODEL_KEYWORDS = [
 	"gemini-1.0",
 	"gemini-1.5",
 	"gemini-2.0",
-	"gemini-2.5",
 	"thinking",
 	"-pro",
 	"carbon",
@@ -35552,20 +35639,38 @@ var PREFERRED_MODEL_ORDER = [
 	"gemini-3.8-flash",
 	"gemini-3.1-flash-lite",
 	"gemini-3-flash",
-	"gemini-3-flash-preview"
+	"gemini-3-flash-preview",
+	"gemini-2.5-flash",
+	"gemini-2.5-flash-lite",
+	"gemma-3-27b-it",
+	"gemma-3-12b-it"
 ];
 var DEFAULT_FALLBACK_MODELS = [
 	"gemini-4-hydrogen",
 	"gemini-3.8-flash",
 	"gemini-3.1-flash-lite",
-	"gemini-3-flash"
+	"gemini-3-flash",
+	"gemma-3-27b-it"
 ];
 function scoreModelRank(name) {
 	const idx = PREFERRED_MODEL_ORDER.indexOf(name);
 	if (idx !== -1) return idx;
 	if (name.includes("flash-lite")) return 15;
 	if (name.includes("flash")) return 20;
+	if (name.startsWith("gemma-3-27b")) return 35;
+	if (name.startsWith("gemma-3-12b")) return 38;
+	if (name.startsWith("gemma-")) return 45;
 	return 60;
+}
+function extractJsonObjectFromText(rawText) {
+	const cleaned = String(rawText || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+	try {
+		return JSON.parse(cleaned || "{}");
+	} catch {
+		const match = cleaned.match(/\{[\s\S]*\}/);
+		if (match) return JSON.parse(match[0]);
+		throw new Error("A IA retornou uma resposta fora do formato JSON esperado.");
+	}
 }
 function extractGeminiErrorText(err) {
 	const raw = typeof err === "string" ? err : String(err?.message || err || "");
@@ -35610,13 +35715,72 @@ async function discoverFlashModelsDirect(apiKey) {
 		const valid = (Array.isArray(data?.models) ? data.models : []).filter((m) => {
 			if (!(Array.isArray(m?.supportedGenerationMethods) ? m.supportedGenerationMethods : []).includes("generateContent")) return false;
 			const shortName = String(m?.name || "").replace(/^models\//, "").toLowerCase();
-			if (!shortName.startsWith("gemini-")) return false;
+			if (!shortName.startsWith("gemini-") && !shortName.startsWith("gemma-3-")) return false;
+			if (shortName.startsWith("gemma-3-") && !shortName.includes("27b") && !shortName.includes("12b")) return false;
 			return !EXCLUDED_MODEL_KEYWORDS.some((kw) => shortName.includes(kw));
 		}).map((m) => String(m.name).replace(/^models\//, ""));
 		const ranked = Array.from(new Set(valid)).sort((a, b) => scoreModelRank(a) - scoreModelRank(b));
-		return ranked.length > 0 ? ranked.slice(0, 4) : [...DEFAULT_FALLBACK_MODELS];
+		return ranked.length > 0 ? ranked.slice(0, 6) : [...DEFAULT_FALLBACK_MODELS];
 	} catch {
 		return [...DEFAULT_FALLBACK_MODELS];
+	}
+}
+async function validateGroqKeyDirect(rawKey) {
+	const key = rawKey.trim();
+	if (!key || key.length < 16 || /\s/.test(key)) return {
+		valid: false,
+		message: "Chave Groq inválida ou incompleta (começa com gsk_)."
+	};
+	try {
+		const ctrl = new AbortController();
+		const timer = window.setTimeout(() => ctrl.abort(), 6500);
+		const res = await fetch("https://api.groq.com/openai/v1/models", {
+			headers: { Authorization: `Bearer ${key}` },
+			signal: ctrl.signal
+		});
+		window.clearTimeout(timer);
+		if (res.ok) return {
+			valid: true,
+			message: "Chave Groq conectada! Alternativa anti-503 pronta."
+		};
+		return {
+			valid: false,
+			message: `Chave Groq recusada (HTTP ${res.status}). Confira em console.groq.com.`
+		};
+	} catch {
+		return {
+			valid: false,
+			message: "Falha de conexão com a API Groq."
+		};
+	}
+}
+async function validateOpenRouterKeyDirect(rawKey) {
+	const key = rawKey.trim();
+	if (!key || key.length < 16 || /\s/.test(key)) return {
+		valid: false,
+		message: "Chave OpenRouter inválida ou incompleta (começa com sk-or-)."
+	};
+	try {
+		const ctrl = new AbortController();
+		const timer = window.setTimeout(() => ctrl.abort(), 6500);
+		const res = await fetch("https://openrouter.ai/api/v1/auth/key", {
+			headers: { Authorization: `Bearer ${key}` },
+			signal: ctrl.signal
+		});
+		window.clearTimeout(timer);
+		if (res.ok) return {
+			valid: true,
+			message: "Chave OpenRouter conectada! Modelos gratuitos prontos."
+		};
+		return {
+			valid: false,
+			message: `Chave OpenRouter recusada (HTTP ${res.status}). Confira em openrouter.ai.`
+		};
+	} catch {
+		return {
+			valid: false,
+			message: "Falha de conexão com a API OpenRouter."
+		};
 	}
 }
 async function validateGeminiKeyDirect(rawKey) {
@@ -35990,11 +36154,149 @@ DETALHES CRÍTICOS:
 - M01: Drone fora do tapete = 20 pts; + peça vermelha LiDAR dentro da caixinha = 30 pts.
 - M02: Haste verde curva centro-esquerda (NÃO confundir com M08 trepadeira). 1=10, 2=20, 3=30 pts.
 `;
-	const aiClient = new GoogleGenAI({ apiKey });
-	const discoveredModels = await discoverFlashModelsDirect(apiKey);
+	const savedCfg = getSavedProviderConfig();
+	const effectiveGeminiKey = (apiKey || savedCfg.geminiKey || "").trim();
+	const effectiveGroqKey = (params.groqApiKey ?? savedCfg.groqKey ?? "").trim();
+	const effectiveOpenRouterKey = (params.openRouterApiKey ?? savedCfg.openRouterKey ?? "").trim();
+	const effectiveProviderPref = params.providerPref || savedCfg.providerPref || "auto";
+	const effectivePreferredGemini = params.preferredGeminiModel && params.preferredGeminiModel !== "auto" ? params.preferredGeminiModel : savedCfg.preferredGeminiModel !== "auto" ? savedCfg.preferredGeminiModel : "";
+	const aiClient = effectiveGeminiKey ? new GoogleGenAI({ apiKey: effectiveGeminiKey }) : null;
+	const discoveredModels = effectiveGeminiKey ? await discoverFlashModelsDirect(effectiveGeminiKey) : [];
+	const JSON_SCHEMA_HINT = `
+RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comentários) seguindo exatamente esta estrutura:
+{
+  "estimatedTotalScore": number,
+  "totalTimeFormatted": "MM:SS",
+  "totalTimeSeconds": number,
+  "overallConfidence": number (0 a 100),
+  "summary": "resumo curto em português",
+  "trajectoryNotes": "observações de trajetória",
+  "mechanismNotes": "observações de mecanismos",
+  "missionsDetected": [
+    {
+      "missionCode": "M01",
+      "status": "Completa" | "Parcial" | "Incompleta",
+      "estimatedScore": number,
+      "timestampEstimate": "00:12",
+      "evidenceDescription": "o que foi visto no quadro/vídeo",
+      "confidence": number (0 a 100)
+    }
+  ]
+}`;
+	const runOpenAiCompatibleVision = async (provider, providerKey, mediaParts, promptText, progressPct, stepLabel) => {
+		const endpoint = provider === "groq" ? "https://api.groq.com/openai/v1/chat/completions" : "https://openrouter.ai/api/v1/chat/completions";
+		const modelsToTry = provider === "groq" ? ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct"] : [
+			"google/gemma-3-27b-it:free",
+			"qwen/qwen2.5-vl-72b-instruct:free",
+			"meta-llama/llama-4-scout:free",
+			"openrouter/free"
+		];
+		const contentItems = [];
+		const maxRefImagesForThirdParty = provider === "groq" ? 2 : 4;
+		let refImgsAdded = 0;
+		contentItems.push({
+			type: "text",
+			text: `Você é um árbitro rigoroso da FLL (BIOGLOW). Códigos permitidos: [${allowedCodesList.join(", ")}].\n${JSON_SCHEMA_HINT}`
+		});
+		for (const p of [...referenceParts, ...trainingParts]) if (p?.text) contentItems.push({
+			type: "text",
+			text: p.text
+		});
+		else if (p?.inlineData?.data && refImgsAdded < maxRefImagesForThirdParty) {
+			refImgsAdded++;
+			contentItems.push({
+				type: "image_url",
+				image_url: { url: `data:${p.inlineData.mimeType || "image/jpeg"};base64,${p.inlineData.data}` }
+			});
+		}
+		contentItems.push({
+			type: "text",
+			text: "MÍDIA DO ROUND:"
+		});
+		let mediaImgsAdded = 0;
+		const maxMediaImgs = provider === "groq" ? 3 : 8;
+		const imageMediaParts = mediaParts.filter((p) => p?.inlineData?.data);
+		const stepSample = imageMediaParts.length > maxMediaImgs ? imageMediaParts.length / maxMediaImgs : 1;
+		if (imageMediaParts.length > maxMediaImgs) for (let k = 0; k < maxMediaImgs; k++) {
+			const imgP = imageMediaParts[Math.min(imageMediaParts.length - 1, Math.floor(k * stepSample))];
+			contentItems.push({
+				type: "image_url",
+				image_url: { url: `data:${imgP.inlineData.mimeType || "image/jpeg"};base64,${imgP.inlineData.data}` }
+			});
+		}
+		else for (const p of mediaParts) if (p?.text) contentItems.push({
+			type: "text",
+			text: p.text
+		});
+		else if (p?.inlineData?.data && mediaImgsAdded < maxMediaImgs) {
+			mediaImgsAdded++;
+			contentItems.push({
+				type: "image_url",
+				image_url: { url: `data:${p.inlineData.mimeType || "image/jpeg"};base64,${p.inlineData.data}` }
+			});
+		}
+		contentItems.push({
+			type: "text",
+			text: promptText
+		});
+		let lastThirdPartyErr = null;
+		for (let i = 0; i < modelsToTry.length; i++) {
+			if (signal?.aborted) throw new Error("ABORTED");
+			const modelId = modelsToTry[i];
+			onProgress(Math.min(95, progressPct + i * 2), `${stepLabel} via ${provider === "groq" ? "Groq" : "OpenRouter"} (${modelId})...`);
+			const ctrl = new AbortController();
+			const timer = window.setTimeout(() => ctrl.abort(), 45e3);
+			try {
+				const headers = {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${providerKey}`
+				};
+				if (provider === "openrouter") {
+					headers["HTTP-Referer"] = window.location.origin;
+					headers["X-Title"] = "FrancoDroid FLL Analytics";
+				}
+				const res = await fetch(endpoint, {
+					method: "POST",
+					headers,
+					signal: ctrl.signal,
+					body: JSON.stringify({
+						model: modelId,
+						messages: [{
+							role: "user",
+							content: contentItems
+						}],
+						temperature: .1,
+						max_tokens: 1800
+					})
+				});
+				window.clearTimeout(timer);
+				const data = await res.json().catch(() => ({}));
+				if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
+				return {
+					parsedData: extractJsonObjectFromText(String(data?.choices?.[0]?.message?.content || "")),
+					successfulModel: `${provider}:${modelId}`
+				};
+			} catch (err) {
+				window.clearTimeout(timer);
+				lastThirdPartyErr = err;
+				const msg = String(err?.message || "").toLowerCase();
+				if (msg.includes("401") || msg.includes("invalid api key") || msg.includes("unauthorized")) throw new Error(`Chave ${provider === "groq" ? "Groq" : "OpenRouter"} inválida. Confira na aba "Configurar IA".`);
+			}
+		}
+		throw new Error(`Falha no provedor alternativo ${provider === "groq" ? "Groq" : "OpenRouter"}: ${String(lastThirdPartyErr?.message || "servidor ocupado")}`);
+	};
 	const runGeminiDirect = async (mediaParts, promptText, progressPct, stepLabel, opts = {}) => {
-		const candidatePool = opts.pinnedModel ? [opts.pinnedModel, ...discoveredModels.filter((m) => m !== opts.pinnedModel)] : discoveredModels;
-		const baseModels = Array.from(new Set(candidatePool)).slice(0, 4);
+		const canSendToThirdParty = opts.hasImageFramesOnly || mediaParts.every((p) => !p?.inlineData?.mimeType?.startsWith("video/"));
+		if (effectiveProviderPref === "groq" && effectiveGroqKey && canSendToThirdParty) return runOpenAiCompatibleVision("groq", effectiveGroqKey, mediaParts, promptText, progressPct, stepLabel);
+		if (effectiveProviderPref === "openrouter" && effectiveOpenRouterKey && canSendToThirdParty) return runOpenAiCompatibleVision("openrouter", effectiveOpenRouterKey, mediaParts, promptText, progressPct, stepLabel);
+		if (!aiClient) {
+			if (effectiveGroqKey && canSendToThirdParty) return runOpenAiCompatibleVision("groq", effectiveGroqKey, mediaParts, promptText, progressPct, stepLabel);
+			if (effectiveOpenRouterKey && canSendToThirdParty) return runOpenAiCompatibleVision("openrouter", effectiveOpenRouterKey, mediaParts, promptText, progressPct, stepLabel);
+			throw new Error("Nenhuma chave de IA configurada. Adicione uma chave Gemini, Groq ou OpenRouter em \"Configurar IA\".");
+		}
+		const startPool = opts.pinnedModel ? [opts.pinnedModel, ...discoveredModels.filter((m) => m !== opts.pinnedModel)] : effectivePreferredGemini ? [effectivePreferredGemini, ...discoveredModels.filter((m) => m !== effectivePreferredGemini)] : discoveredModels;
+		const filteredPool = mediaParts.some((p) => String(p?.inlineData?.mimeType || "").startsWith("video/")) ? startPool.filter((m) => !m.startsWith("gemma-")) : startPool;
+		const baseModels = Array.from(new Set(filteredPool)).slice(0, 6);
 		const multimodalParts = [
 			...referenceParts,
 			...trainingParts,
@@ -36007,7 +36309,9 @@ DETALHES CRÍTICOS:
 		let sawTransient503 = false;
 		const trySingleModel = async (modelCandidate, pct, label) => {
 			onProgress(Math.min(96, pct), label);
+			const isGemma = modelCandidate.startsWith("gemma-");
 			const buildCfg = (includeAdvanced) => {
+				if (isGemma) return { temperature: .1 };
 				const cfg = {
 					systemInstruction: `Você é um árbitro rigoroso da FLL (BIOGLOW). Retorne estritamente JSON válido. Nunca invente missões não executadas no vídeo. Códigos permitidos: [${allowedCodesList.join(", ")}].`,
 					responseMimeType: "application/json",
@@ -36066,25 +36370,32 @@ DETALHES CRÍTICOS:
 				}
 				return cfg;
 			};
+			const partsForModel = isGemma ? [
+				...referenceParts,
+				...trainingParts,
+				{ text: "MÍDIA DO ROUND:" },
+				...mediaParts,
+				{ text: `Você é um árbitro rigoroso da FLL (BIOGLOW). Códigos permitidos: [${allowedCodesList.join(", ")}].\n${promptText}\n${JSON_SCHEMA_HINT}` }
+			] : multimodalParts;
 			const timeoutPromise = new Promise((_, reject) => window.setTimeout(() => reject(/* @__PURE__ */ new Error(`Tempo limite (${Math.round(perModelTimeoutMs / 1e3)}s) no modelo ${modelCandidate}`)), perModelTimeoutMs));
 			let response;
 			try {
 				response = await Promise.race([aiClient.models.generateContent({
 					model: modelCandidate,
-					contents: { parts: multimodalParts },
+					contents: { parts: partsForModel },
 					config: buildCfg(true)
 				}), timeoutPromise]);
 			} catch (firstErr) {
 				const msg = String(firstErr?.message || "");
-				if (msg.includes("INVALID_ARGUMENT") || msg.includes("400") || msg.toLowerCase().includes("thinking") || msg.toLowerCase().includes("mediaresolution")) response = await Promise.race([aiClient.models.generateContent({
+				if (!isGemma && (msg.includes("INVALID_ARGUMENT") || msg.includes("400") || msg.toLowerCase().includes("thinking") || msg.toLowerCase().includes("mediaresolution"))) response = await Promise.race([aiClient.models.generateContent({
 					model: modelCandidate,
-					contents: { parts: multimodalParts },
+					contents: { parts: partsForModel },
 					config: buildCfg(false)
 				}), timeoutPromise]);
 				else throw firstErr;
 			}
 			return {
-				parsedData: JSON.parse((response.text ?? "{}").trim()),
+				parsedData: extractJsonObjectFromText(response.text ?? "{}"),
 				successfulModel: modelCandidate
 			};
 		};
@@ -36101,17 +36412,28 @@ DETALHES CRÍTICOS:
 					sawTransient503 = true;
 					if (i < baseModels.length - 1) {
 						onProgress(Math.min(95, progressPct + i * 2 + 1), `Modelo ${modelCandidate} ocupado (503) — alternando para ${baseModels[i + 1]}...`);
-						await new Promise((r) => window.setTimeout(r, 1200));
+						await new Promise((r) => window.setTimeout(r, 1e3));
 					}
 				}
 			}
 		}
-		if (sawTransient503 && !signal?.aborted) {
+		if (sawTransient503 && effectiveProviderPref === "auto" && canSendToThirdParty && !signal?.aborted) {
+			if (effectiveGroqKey) try {
+				onProgress(Math.min(95, progressPct + 4), "Gemini ocupado (503) — alternando para Groq Vision...");
+				return await runOpenAiCompatibleVision("groq", effectiveGroqKey, mediaParts, promptText, progressPct + 4, stepLabel);
+			} catch {}
+			if (effectiveOpenRouterKey) try {
+				onProgress(Math.min(95, progressPct + 4), "Gemini ocupado (503) — alternando para OpenRouter Vision...");
+				return await runOpenAiCompatibleVision("openrouter", effectiveOpenRouterKey, mediaParts, promptText, progressPct + 4, stepLabel);
+			} catch {}
+		}
+		if (sawTransient503 && !signal?.aborted && baseModels.length > 0) {
 			const retryQueue = [...baseModels].sort((a, b) => {
-				return (a.includes("lite") ? 0 : 1) - (b.includes("lite") ? 0 : 1);
+				const score = (m) => m.startsWith("gemma-") ? 0 : m.includes("lite") ? 1 : 2;
+				return score(a) - score(b);
 			}).slice(0, 2);
-			onProgress(Math.min(95, progressPct + 4), "Servidores Gemini com pico temporário (503). Aguardando 2,5s para nova tentativa...");
-			await new Promise((r) => window.setTimeout(r, 2500));
+			onProgress(Math.min(95, progressPct + 4), "Servidores Gemini com pico temporário (503). Aguardando 2s para nova tentativa...");
+			await new Promise((r) => window.setTimeout(r, 2e3));
 			for (let j = 0; j < retryQueue.length; j++) {
 				if (signal?.aborted) throw new Error("ABORTED");
 				const retryModel = retryQueue[j];
@@ -36119,7 +36441,7 @@ DETALHES CRÍTICOS:
 					return await trySingleModel(retryModel, progressPct + 6 + j, `Tentando novamente (${retryModel})...`);
 				} catch (retryErr) {
 					lastErr = retryErr;
-					if (j < retryQueue.length - 1 && isTransientOverloadError(retryErr)) await new Promise((r) => window.setTimeout(r, 1400));
+					if (j < retryQueue.length - 1 && isTransientOverloadError(retryErr)) await new Promise((r) => window.setTimeout(r, 1200));
 				}
 			}
 		}
@@ -36136,7 +36458,7 @@ DETALHES CRÍTICOS:
 		const { parsedData, successfulModel } = await runGeminiDirect([{ inlineData: {
 			mimeType: mediaFile.type || "image/jpeg",
 			data: b64
-		} }], buildPrompt(), 55, "Analisando foto com IA");
+		} }], buildPrompt(), 55, "Analisando foto com IA", { hasImageFramesOnly: true });
 		return {
 			...sanitizeClientAnalysisOutput(parsedData, allowedSanitizeList, hasGabarito, relevantTraining.length, cleanedInformed),
 			modelUsed: successfulModel
@@ -36146,7 +36468,8 @@ DETALHES CRÍTICOS:
 	const probedDur = params.videoDuration > 0 ? params.videoDuration : await probeBrowserVideoDuration(mediaFile);
 	const effectiveDuration = Math.max(2, probedDur || 30);
 	const fileMb = mediaFile.size / 1048576;
-	if (!(splitMode === "parts" || fileMb > 12 || splitMode === "auto" && effectiveDuration > 40) && fileMb <= 12) {
+	const usingThirdPartyDirect = effectiveProviderPref === "groq" || effectiveProviderPref === "openrouter" || !effectiveGeminiKey && (Boolean(effectiveGroqKey) || Boolean(effectiveOpenRouterKey));
+	if (!(Boolean(params.forceKeyframes) || usingThirdPartyDirect || splitMode === "parts" || fileMb > 12 || splitMode === "auto" && effectiveDuration > 40) && fileMb <= 12) try {
 		onProgress(40, "Preparando vídeo direto para IA...");
 		const b64 = await fileToBase64Raw(mediaFile);
 		const { parsedData, successfulModel } = await runGeminiDirect([{ inlineData: {
@@ -36157,8 +36480,12 @@ DETALHES CRÍTICOS:
 			...sanitizeClientAnalysisOutput(parsedData, allowedSanitizeList, hasGabarito, relevantTraining.length, cleanedInformed),
 			modelUsed: successfulModel
 		};
+	} catch (directErr) {
+		if (String(directErr?.message || "") === "ABORTED") throw directErr;
+		if (!isTransientOverloadError(directErr)) throw directErr;
+		onProgress(35, "Envio MP4 congestionado (503). Extraindo quadros leves anti-503 automaticamente...");
 	}
-	const partCount = effectiveDuration <= 22 ? 2 : Math.min(4, Math.max(2, Math.ceil(effectiveDuration / 30)));
+	const partCount = effectiveDuration <= 18 && params.forceKeyframes ? 1 : effectiveDuration <= 22 ? 2 : Math.min(4, Math.max(2, Math.ceil(effectiveDuration / 30)));
 	const segLen = effectiveDuration / partCount;
 	const segments = [];
 	for (let i = 0; i < partCount; i++) {
@@ -36189,7 +36516,8 @@ DETALHES CRÍTICOS:
 		const promptText = buildPrompt(`Parte ${seg.index + 1}/${segments.length} (${label} de ${formatSecShort(effectiveDuration)}). Avalie apenas ações visíveis nestes quadros.`);
 		const { parsedData, successfulModel } = await runGeminiDirect(frameParts, promptText, basePct + 6, `Analisando Parte ${seg.index + 1}/${segments.length} (${label})`, {
 			isMultiPart: true,
-			pinnedModel: modelPin
+			pinnedModel: modelPin,
+			hasImageFramesOnly: true
 		});
 		return {
 			startSec: seg.startSec,
@@ -36591,11 +36919,54 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 		}
 		return uploadId;
 	};
-	const handleAnalyze = async (overrideSplitMode) => {
-		const activeSplitMode = overrideSplitMode || splitMode;
-		const savedApiKey = localStorage.getItem("francodroid_user_gemini_api_key")?.trim() || "";
-		if (!savedApiKey) {
-			onShowToast("Conecte sua chave da IA acima (Passo 2) antes de analisar.", "error");
+	const startManualScoring = () => {
+		const dur = videoDuration ? Math.round(videoDuration) : 60;
+		const mins = Math.floor(dur / 60);
+		const secs = dur % 60;
+		const formatted = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+		const prefilled = informedMissions.map((code) => {
+			return {
+				missionCode: code,
+				status: "completed",
+				estimatedScore: BIOGLOW_OFFICIAL_MISSIONS.find((bm) => bm.code === code)?.maxScore || 20,
+				timestampEstimate: formatted,
+				evidenceDescription: "Marcado manualmente pelo operador assistindo ao vídeo.",
+				confidence: 100
+			};
+		});
+		const manualResult = {
+			modelUsed: "manual-offline",
+			estimatedTotalScore: prefilled.reduce((s, m) => s + m.estimatedScore, 0),
+			totalTimeFormatted: formatted,
+			totalTimeSeconds: dur,
+			overallConfidence: 100,
+			summary: "Apuração manual direta pelo vídeo (sem dependência da IA). Ajuste ou adicione as missões abaixo e salve no histórico.",
+			trajectoryNotes: "",
+			mechanismNotes: "",
+			missionsDetected: prefilled,
+			usedGabarito: false,
+			gabaritoWarning: "Modo Manual ativado: adicione ou edite as missões abaixo enquanto assiste ao vídeo acima e clique em Salvar no Histórico."
+		};
+		setLastErrorMsg(null);
+		setResult(manualResult);
+		setOriginalAiMissions([]);
+		setEditableMissions(prefilled);
+		setEditableTime(dur);
+		setTrainingSavedForRun(false);
+		onShowToast("Modo Manual ativado! Marque as missões abaixo e salve.", "info");
+		setTimeout(() => {
+			resultsRef.current?.scrollIntoView({
+				behavior: "smooth",
+				block: "start"
+			});
+		}, 120);
+	};
+	const handleAnalyze = async (options) => {
+		const activeSplitMode = options?.overrideSplitMode || splitMode;
+		const providerCfg = getSavedProviderConfig();
+		const savedApiKey = providerCfg.geminiKey;
+		if (!Boolean(savedApiKey || providerCfg.groqKey || providerCfg.openRouterKey)) {
+			onShowToast("Conecte sua chave da IA (Gemini, Groq ou OpenRouter) antes de analisar.", "error");
 			return;
 		}
 		if (!mediaFile) {
@@ -36617,28 +36988,34 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 		activeJobIdRef.current = null;
 		const abortCtrl = new AbortController();
 		activeAbortRef.current = abortCtrl;
-		setAnalysisStep(isVideo ? `Preparando envio de vídeo (${mediaSizeMb.toFixed(1)} MB)...` : "Enviando foto da mesa...");
+		setAnalysisStep(options?.forceKeyframes ? "Extraindo quadros-chave leves (modo anti-503)..." : isVideo ? `Preparando envio de vídeo (${mediaSizeMb.toFixed(1)} MB)...` : "Enviando foto da mesa...");
 		const startTime = Date.now();
 		const elapsedTimer = setInterval(() => {
 			setElapsedSeconds(Math.floor((Date.now() - startTime) / 1e3));
 		}, 1e3);
+		const runClientEngine = () => analyzeMediaClientSide({
+			mediaFile,
+			isVideo,
+			videoDuration,
+			informedMissions,
+			references,
+			trainingExamples,
+			splitMode: activeSplitMode,
+			apiKey: savedApiKey,
+			groqApiKey: providerCfg.groqKey,
+			openRouterApiKey: providerCfg.openRouterKey,
+			providerPref: providerCfg.providerPref,
+			preferredGeminiModel: options?.overrideModel || providerCfg.preferredGeminiModel,
+			forceKeyframes: options?.forceKeyframes,
+			signal: abortCtrl.signal,
+			onProgress: (pct, msg) => {
+				setAnalysisPercent(pct);
+				setAnalysisStep(msg);
+			}
+		});
 		try {
 			let resData;
-			if (!await hasBackendServer()) resData = await analyzeMediaClientSide({
-				mediaFile,
-				isVideo,
-				videoDuration,
-				informedMissions,
-				references,
-				trainingExamples,
-				splitMode: activeSplitMode,
-				apiKey: savedApiKey,
-				signal: abortCtrl.signal,
-				onProgress: (pct, msg) => {
-					setAnalysisPercent(pct);
-					setAnalysisStep(msg);
-				}
-			});
+			if (!await hasBackendServer() || Boolean(options?.forceKeyframes) || providerCfg.providerPref === "groq" || providerCfg.providerPref === "openrouter" || !savedApiKey) resData = await runClientEngine();
 			else {
 				const scopeCodes = informedMissions.length > 0 ? informedMissions : BIOGLOW_OFFICIAL_MISSIONS.map((m) => m.code);
 				let includeInlineRefImages = false;
@@ -36706,6 +37083,7 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 					useServerGabarito: validGabaritoKeys.length > 0,
 					splitMode: activeSplitMode,
 					clientTrainingExamples: clientTrainingPayload,
+					preferredGeminiModel: options?.overrideModel || providerCfg.preferredGeminiModel,
 					userApiKey: savedApiKey,
 					missions: payloadMissions
 				};
@@ -36764,46 +37142,74 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 				activeXhrRef.current = null;
 				if (cancelRequestedRef.current) return;
 				let serverResData;
-				if (startResponse.jobId) {
-					const jobId = String(startResponse.jobId);
-					activeJobIdRef.current = jobId;
-					setAnalysisPercent(30);
-					setAnalysisStep("Preparando mídia no servidor...");
-					const absoluteMaxWaitMs = 36e4;
-					const stallTimeoutMs = 11e4;
-					const pollStart = Date.now();
-					let lastActivityAt = Date.now();
-					let lastServerSig = "";
-					let lastStepSnapshot = "Preparando mídia no servidor...";
-					while (true) {
-						if (cancelRequestedRef.current) throw new Error("ABORTED");
-						const now = Date.now();
-						if (now - lastActivityAt > stallTimeoutMs) throw new Error(activeSplitMode === "parts" ? `A IA ficou sem resposta por mais de 110s na etapa "${lastStepSnapshot}". Informe apenas as missões feitas acima para acelerar ou corte um trecho menor (15–30s) no Cortador.` : `A IA ficou sem resposta por mais de 110s na etapa "${lastStepSnapshot}". Use "Dividir em Partes" ou corte apenas o trecho das missões.`);
-						if (now - pollStart > absoluteMaxWaitMs) throw new Error(activeSplitMode === "parts" ? "O vídeo demorou mais de 6 minutos mesmo dividido em partes. Informe apenas as missões feitas acima ou corte um trecho de 15–30s no Cortador." : "A IA demorou mais de 6 minutos. Use \"Dividir em Partes\" ou corte apenas o trecho das missões.");
-						await new Promise((r) => setTimeout(r, 1100));
-						if (cancelRequestedRef.current) throw new Error("ABORTED");
-						const pollRes = await fetch(`/api/ai/jobs/${encodeURIComponent(jobId)}`);
-						const jobData = await parseFetchJsonSafely(pollRes, "acompanhar análise");
-						const serverSig = `${jobData.stage ?? ""}|${jobData.progress ?? ""}|${jobData.message ?? ""}|${jobData.updatedAt ?? ""}`;
-						if (serverSig !== lastServerSig) {
-							lastServerSig = serverSig;
-							lastActivityAt = Date.now();
+				try {
+					if (startResponse.jobId) {
+						const jobId = String(startResponse.jobId);
+						activeJobIdRef.current = jobId;
+						setAnalysisPercent(30);
+						setAnalysisStep("Preparando mídia no servidor...");
+						const absoluteMaxWaitMs = 36e4;
+						const stallTimeoutMs = 11e4;
+						const pollStart = Date.now();
+						let lastActivityAt = Date.now();
+						let lastServerSig = "";
+						let lastStepSnapshot = "Preparando mídia no servidor...";
+						while (true) {
+							if (cancelRequestedRef.current) throw new Error("ABORTED");
+							const now = Date.now();
+							if (now - lastActivityAt > stallTimeoutMs) throw new Error(activeSplitMode === "parts" ? `A IA ficou sem resposta por mais de 110s na etapa "${lastStepSnapshot}". Informe apenas as missões feitas acima para acelerar ou corte um trecho menor (15–30s) no Cortador.` : `A IA ficou sem resposta por mais de 110s na etapa "${lastStepSnapshot}". Use "Dividir em Partes" ou corte apenas o trecho das missões.`);
+							if (now - pollStart > absoluteMaxWaitMs) throw new Error(activeSplitMode === "parts" ? "O vídeo demorou mais de 6 minutos mesmo dividido em partes. Informe apenas as missões feitas acima ou corte um trecho de 15–30s no Cortador." : "A IA demorou mais de 6 minutos. Use \"Dividir em Partes\" ou corte apenas o trecho das missões.");
+							await new Promise((r) => setTimeout(r, 1100));
+							if (cancelRequestedRef.current) throw new Error("ABORTED");
+							const pollRes = await fetch(`/api/ai/jobs/${encodeURIComponent(jobId)}`);
+							const jobData = await parseFetchJsonSafely(pollRes, "acompanhar análise");
+							const serverSig = `${jobData.stage ?? ""}|${jobData.progress ?? ""}|${jobData.message ?? ""}|${jobData.updatedAt ?? ""}`;
+							if (serverSig !== lastServerSig) {
+								lastServerSig = serverSig;
+								lastActivityAt = Date.now();
+							}
+							if (typeof jobData.progress === "number") setAnalysisPercent((prev) => Math.max(prev, Math.min(98, jobData.progress)));
+							if (jobData.message) {
+								lastStepSnapshot = jobData.message;
+								setAnalysisStep(jobData.message);
+							}
+							if (jobData.stage === "done" && jobData.analysis) {
+								serverResData = jobData.analysis;
+								break;
+							}
+							if (jobData.stage === "error") throw new Error(jobData.error || "Erro durante a análise na IA.");
+							if (jobData.stage === "cancelled") throw new Error("ABORTED");
 						}
-						if (typeof jobData.progress === "number") setAnalysisPercent((prev) => Math.max(prev, Math.min(98, jobData.progress)));
-						if (jobData.message) {
-							lastStepSnapshot = jobData.message;
-							setAnalysisStep(jobData.message);
-						}
-						if (jobData.stage === "done" && jobData.analysis) {
-							serverResData = jobData.analysis;
-							break;
-						}
-						if (jobData.stage === "error") throw new Error(jobData.error || "Erro durante a análise na IA.");
-						if (jobData.stage === "cancelled") throw new Error("ABORTED");
-					}
-				} else if (startResponse.analysis) serverResData = startResponse.analysis;
-				else throw new Error("Resposta inesperada do servidor.");
-				resData = serverResData;
+					} else if (startResponse.analysis) serverResData = startResponse.analysis;
+					else throw new Error("Resposta inesperada do servidor.");
+					resData = serverResData;
+				} catch (srvErr) {
+					if (srvErr?.message === "ABORTED" || cancelRequestedRef.current) throw srvErr;
+					if (isVideo && isTransientOverloadError(srvErr)) {
+						setAnalysisStep("Servidor congestionado (503). Ativando alternativa automática por quadros-chave leves...");
+						setAnalysisPercent(35);
+						resData = await analyzeMediaClientSide({
+							mediaFile,
+							isVideo: true,
+							videoDuration,
+							informedMissions,
+							references,
+							trainingExamples,
+							splitMode: "parts",
+							apiKey: savedApiKey,
+							groqApiKey: providerCfg.groqKey,
+							openRouterApiKey: providerCfg.openRouterKey,
+							providerPref: providerCfg.providerPref,
+							preferredGeminiModel: options?.overrideModel || providerCfg.preferredGeminiModel,
+							forceKeyframes: true,
+							signal: abortCtrl.signal,
+							onProgress: (pct, msg) => {
+								setAnalysisPercent(pct);
+								setAnalysisStep(msg);
+							}
+						});
+					} else throw srvErr;
+				}
 			}
 			activeJobIdRef.current = null;
 			setAnalysisPercent(100);
@@ -37490,7 +37896,7 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 						})]
 					}),
 					lastErrorMsg && !isAnalyzing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "rounded-2xl p-4 border border-rose-500/40 bg-rose-950/25 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-left fd-fade-up",
+						className: "rounded-2xl p-4 sm:p-5 border border-rose-500/40 bg-rose-950/25 space-y-3 text-left fd-fade-up",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "flex items-start gap-2.5",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleX, { className: "w-4 h-4 text-rose-400 shrink-0 mt-0.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -37503,36 +37909,71 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 									children: lastErrorMsg
 								})]
 							})]
-						}), isVideo && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "flex flex-wrap items-center gap-2 shrink-0",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								type: "button",
-								onClick: () => {
-									if (splitMode !== "parts") {
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex flex-wrap items-center gap-2 pt-1",
+							children: [
+								isVideo && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									onClick: () => {
 										setSplitMode("parts");
-										handleAnalyze("parts");
-									} else handleAnalyze("parts");
-								},
-								className: "px-3 py-2 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-bold flex items-center gap-1.5",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Layers, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: splitMode === "parts" ? "Tentar em Partes Novamente" : "Dividir em Partes e Tentar" })]
-							}), !showTrimmer && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								type: "button",
-								onClick: () => setShowTrimmer(true),
-								className: "px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Scissors, { className: "w-3.5 h-3.5 text-cyan-300" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Cortar Vídeo" })]
-							})]
+										handleAnalyze({
+											overrideSplitMode: "parts",
+											forceKeyframes: true
+										});
+									},
+									className: "px-3 py-2 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-bold flex items-center gap-1.5",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Layers, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Analisar por Quadros (Anti-503)" })]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									onClick: () => void handleAnalyze({
+										forceKeyframes: isVideo,
+										overrideSplitMode: isVideo ? "parts" : void 0,
+										overrideModel: "gemma-3-27b-it"
+									}),
+									className: "px-3 py-2 rounded-xl bg-emerald-400/20 hover:bg-emerald-400/30 text-emerald-200 border border-emerald-400/30 text-xs font-semibold flex items-center gap-1.5",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Cpu, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Tentar c/ Gemma 3 / Flash-Lite" })]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									onClick: onNavigateToApi,
+									className: "px-3 py-2 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 text-amber-200 border border-amber-400/30 text-xs font-semibold flex items-center gap-1.5",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Key, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Usar Groq / OpenRouter (Grátis)" })]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									onClick: startManualScoring,
+									className: "px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FileText, { className: "w-3.5 h-3.5 text-cyan-300" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Marcar Pontos Manualmente (Sem IA)" })]
+								}),
+								isVideo && !showTrimmer && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									onClick: () => setShowTrimmer(true),
+									className: "px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Scissors, { className: "w-3.5 h-3.5 text-cyan-300" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Cortar Vídeo" })]
+								})
+							]
 						})]
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						disabled: !mediaFile || isAnalyzing || isOverMaxLimit,
-						onClick: () => void handleAnalyze(),
-						className: `w-full py-3.5 rounded-xl font-bold text-xs tracking-wide transition-all flex items-center justify-center gap-2 ${!mediaFile || isAnalyzing || isOverMaxLimit ? "bg-white/5 text-slate-500 cursor-not-allowed border border-white/10" : "bg-gradient-to-r from-cyan-400 to-emerald-400 text-slate-950 hover:brightness-105 shadow-xl shadow-cyan-500/20 active:scale-[0.99]"}`,
-						children: isAnalyzing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-							"Analisando (",
-							elapsedSeconds,
-							"s)..."
-						] })] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sparkles, { className: "w-4 h-4" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: !isAiReady ? "Conecte a Chave da IA acima para Analisar" : splitMode === "parts" && isVideo ? "Dividir em Partes e Analisar com IA" : "Analisar Vídeo com IA" })] })
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex flex-col sm:flex-row gap-2.5",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							disabled: !mediaFile || isAnalyzing || isOverMaxLimit,
+							onClick: () => void handleAnalyze(),
+							className: `flex-1 py-3.5 rounded-xl font-bold text-xs tracking-wide transition-all flex items-center justify-center gap-2 ${!mediaFile || isAnalyzing || isOverMaxLimit ? "bg-white/5 text-slate-500 cursor-not-allowed border border-white/10" : "bg-gradient-to-r from-cyan-400 to-emerald-400 text-slate-950 hover:brightness-105 shadow-xl shadow-cyan-500/20 active:scale-[0.99]"}`,
+							children: isAnalyzing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+								"Analisando (",
+								elapsedSeconds,
+								"s)..."
+							] })] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sparkles, { className: "w-4 h-4" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: !isAiReady ? "Conecte uma Chave de IA (Gemini, Groq ou OpenRouter)" : splitMode === "parts" && isVideo ? "Dividir em Partes e Analisar com IA" : "Analisar Vídeo com IA" })] })
+						}), mediaFile && !isAnalyzing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
+							onClick: startManualScoring,
+							className: "px-4 py-3.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-slate-200 text-xs font-semibold flex items-center justify-center gap-1.5 shrink-0 transition-all",
+							title: "Preencher pontuação manualmente assistindo ao vídeo sem depender de IA",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FileText, { className: "w-3.5 h-3.5 text-cyan-300" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Marcar Manual" })]
+						})]
 					})
 				]
 			}),
@@ -63344,15 +63785,39 @@ var ApiSettingsView = ({ isAiReady = false, onShowToast, onApiKeySaved }) => {
 	const [showKey, setShowKey] = (0, import_react.useState)(false);
 	const [isValidating, setIsValidating] = (0, import_react.useState)(false);
 	const [validationStatus, setValidationStatus] = (0, import_react.useState)(isAiReady ? "valid" : "idle");
+	const [groqKey, setGroqKey] = (0, import_react.useState)("");
+	const [savedGroqKey, setSavedGroqKey] = (0, import_react.useState)("");
+	const [showGroqKey, setShowGroqKey] = (0, import_react.useState)(false);
+	const [groqStatus, setGroqStatus] = (0, import_react.useState)("idle");
+	const [isValidatingGroq, setIsValidatingGroq] = (0, import_react.useState)(false);
+	const [openRouterKey, setOpenRouterKey] = (0, import_react.useState)("");
+	const [savedOpenRouterKey, setSavedOpenRouterKey] = (0, import_react.useState)("");
+	const [showOpenRouterKey, setShowOpenRouterKey] = (0, import_react.useState)(false);
+	const [openRouterStatus, setOpenRouterStatus] = (0, import_react.useState)("idle");
+	const [isValidatingOpenRouter, setIsValidatingOpenRouter] = (0, import_react.useState)(false);
+	const [providerPref, setProviderPref] = (0, import_react.useState)("auto");
+	const [preferredGeminiModel, setPreferredGeminiModel] = (0, import_react.useState)("auto");
 	(0, import_react.useEffect)(() => {
 		try {
-			const stored = localStorage.getItem("francodroid_user_gemini_api_key") || "";
-			if (stored) {
-				setSavedKey(stored);
-				setApiKey(stored);
+			const cfg = getSavedProviderConfig();
+			if (cfg.geminiKey) {
+				setSavedKey(cfg.geminiKey);
+				setApiKey(cfg.geminiKey);
 				if (isAiReady) setValidationStatus("valid");
-				else validateKeyOnServer(stored);
+				else validateKeyOnServer(cfg.geminiKey);
 			}
+			if (cfg.groqKey) {
+				setGroqKey(cfg.groqKey);
+				setSavedGroqKey(cfg.groqKey);
+				setGroqStatus("valid");
+			}
+			if (cfg.openRouterKey) {
+				setOpenRouterKey(cfg.openRouterKey);
+				setSavedOpenRouterKey(cfg.openRouterKey);
+				setOpenRouterStatus("valid");
+			}
+			setProviderPref(cfg.providerPref);
+			setPreferredGeminiModel(cfg.preferredGeminiModel || "auto");
 		} catch {}
 	}, [isAiReady]);
 	const validateKeyOnServer = async (keyToValidate) => {
@@ -63372,7 +63837,7 @@ var ApiSettingsView = ({ isAiReady = false, onShowToast, onApiKeySaved }) => {
 				data = await res.json();
 				if (!res.ok && !data?.valid) {
 					setValidationStatus("invalid");
-					onApiKeySaved?.(keyToValidate.trim(), false);
+					onApiKeySaved?.(keyToValidate.trim(), hasAnyConfiguredAiProvider());
 					return {
 						valid: false,
 						message: data?.message
@@ -63389,7 +63854,7 @@ var ApiSettingsView = ({ isAiReady = false, onShowToast, onApiKeySaved }) => {
 				};
 			} else {
 				setValidationStatus("invalid");
-				onApiKeySaved?.(keyToValidate.trim(), false);
+				onApiKeySaved?.(keyToValidate.trim(), hasAnyConfiguredAiProvider());
 				return {
 					valid: false,
 					message: data.message
@@ -63397,7 +63862,7 @@ var ApiSettingsView = ({ isAiReady = false, onShowToast, onApiKeySaved }) => {
 			}
 		} catch {
 			setValidationStatus("invalid");
-			onApiKeySaved?.(keyToValidate.trim(), false);
+			onApiKeySaved?.(keyToValidate.trim(), hasAnyConfiguredAiProvider());
 			return {
 				valid: false,
 				message: "Erro de rede ao validar chave."
@@ -63418,6 +63883,7 @@ var ApiSettingsView = ({ isAiReady = false, onShowToast, onApiKeySaved }) => {
 		if (validation.valid) try {
 			localStorage.setItem(API_KEY_STORAGE_KEY, trimmed);
 			setSavedKey(trimmed);
+			onApiKeySaved?.(trimmed, true);
 			onShowToast(validation.message || "Chave Gemini válida e conectada com sucesso!", validation.quotaWarning ? "info" : "success");
 		} catch {
 			onShowToast("Chave válida, mas falha ao gravar no navegador.", "error");
@@ -63430,8 +63896,78 @@ var ApiSettingsView = ({ isAiReady = false, onShowToast, onApiKeySaved }) => {
 		setValidationStatus("idle");
 		try {
 			localStorage.removeItem(API_KEY_STORAGE_KEY);
-			onShowToast("Chave removida.", "info");
-			onApiKeySaved?.("", false);
+			onShowToast("Chave Gemini removida.", "info");
+			onApiKeySaved?.("", hasAnyConfiguredAiProvider());
+		} catch {}
+	};
+	const handleSaveGroq = async () => {
+		const trimmed = groqKey.trim();
+		if (!trimmed) {
+			setGroqKey("");
+			setSavedGroqKey("");
+			setGroqStatus("idle");
+			localStorage.removeItem(GROQ_API_KEY_STORAGE_KEY);
+			onShowToast("Chave Groq removida.", "info");
+			onApiKeySaved?.(savedKey, hasAnyConfiguredAiProvider());
+			return;
+		}
+		setIsValidatingGroq(true);
+		try {
+			const check = await validateGroqKeyDirect(trimmed);
+			if (check.valid) {
+				localStorage.setItem(GROQ_API_KEY_STORAGE_KEY, trimmed);
+				setSavedGroqKey(trimmed);
+				setGroqStatus("valid");
+				onApiKeySaved?.(trimmed, true);
+				onShowToast(check.message, "success");
+			} else {
+				setGroqStatus("invalid");
+				onShowToast(check.message, "error");
+			}
+		} finally {
+			setIsValidatingGroq(false);
+		}
+	};
+	const handleSaveOpenRouter = async () => {
+		const trimmed = openRouterKey.trim();
+		if (!trimmed) {
+			setOpenRouterKey("");
+			setSavedOpenRouterKey("");
+			setOpenRouterStatus("idle");
+			localStorage.removeItem(OPENROUTER_API_KEY_STORAGE_KEY);
+			onShowToast("Chave OpenRouter removida.", "info");
+			onApiKeySaved?.(savedKey, hasAnyConfiguredAiProvider());
+			return;
+		}
+		setIsValidatingOpenRouter(true);
+		try {
+			const check = await validateOpenRouterKeyDirect(trimmed);
+			if (check.valid) {
+				localStorage.setItem(OPENROUTER_API_KEY_STORAGE_KEY, trimmed);
+				setSavedOpenRouterKey(trimmed);
+				setOpenRouterStatus("valid");
+				onApiKeySaved?.(trimmed, true);
+				onShowToast(check.message, "success");
+			} else {
+				setOpenRouterStatus("invalid");
+				onShowToast(check.message, "error");
+			}
+		} finally {
+			setIsValidatingOpenRouter(false);
+		}
+	};
+	const handleProviderPrefChange = (nextPref) => {
+		setProviderPref(nextPref);
+		try {
+			localStorage.setItem(AI_PROVIDER_PREF_KEY, nextPref);
+			onShowToast("Ordem de provedores atualizada.", "info");
+		} catch {}
+	};
+	const handlePreferredModelChange = (modelId) => {
+		setPreferredGeminiModel(modelId);
+		try {
+			localStorage.setItem(PREFERRED_GEMINI_MODEL_KEY, modelId);
+			onShowToast("Preferência de modelo Gemini atualizada.", "info");
 		} catch {}
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -63443,8 +63979,60 @@ var ApiSettingsView = ({ isAiReady = false, onShowToast, onApiKeySaved }) => {
 					className: "text-3xl sm:text-4xl font-bold tracking-tight text-white text-balance",
 					children: "Conectar Inteligência Artificial"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "text-slate-400 text-sm max-w-md mx-auto leading-relaxed",
-					children: "Cole sua chave gratuita do Google AI Studio para ativar a análise de vídeo e comparação visual com o gabarito."
+					className: "text-slate-400 text-sm max-w-lg mx-auto leading-relaxed",
+					children: "Configure o Google Gemini ou adicione provedores alternativos gratuitos (Groq / OpenRouter) para nunca travar com erro 503."
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fd-panel rounded-3xl p-5 sm:p-6 space-y-4",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "flex items-center gap-2.5 text-white font-semibold text-sm",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Cpu, { className: "w-4 h-4 text-cyan-300" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Estratégia de Execução e Modelo Anti-503" })]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "space-y-1.5",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+							className: "text-slate-300 font-medium block",
+							children: "Ordem de Provedores:"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+							value: providerPref,
+							onChange: (e) => handleProviderPrefChange(e.target.value),
+							className: "w-full bg-black/50 border border-white/15 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-cyan-400",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "auto",
+									children: "Automático (Gemini → Groq → OpenRouter)"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "groq",
+									children: "Sempre usar Groq Vision primeiro"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "openrouter",
+									children: "Sempre usar OpenRouter Free primeiro"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "gemini",
+									children: "Somente Google Gemini"
+								})
+							]
+						})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "space-y-1.5",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+							className: "text-slate-300 font-medium block",
+							children: "Modelo Gemini Prioritário:"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+							value: preferredGeminiModel,
+							onChange: (e) => handlePreferredModelChange(e.target.value),
+							className: "w-full bg-black/50 border border-white/15 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-cyan-400",
+							children: SELECTABLE_GEMINI_MODELS.map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+								value: m.id,
+								children: m.label
+							}, m.id))
+						})]
+					})]
 				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -63459,10 +64047,10 @@ var ApiSettingsView = ({ isAiReady = false, onShowToast, onApiKeySaved }) => {
 								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Key, { className: "w-4 h-4 text-cyan-300" })
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 								className: "text-sm font-semibold text-white",
-								children: "Chave da API Gemini"
+								children: "Chave da API Google Gemini"
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "text-xs text-slate-400",
-								children: "Verificação em tempo real"
+								children: "Suporta vídeo direto e fotos do gabarito"
 							})] })]
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "text-xs font-mono",
@@ -63485,7 +64073,7 @@ var ApiSettingsView = ({ isAiReady = false, onShowToast, onApiKeySaved }) => {
 						className: "space-y-2",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
 							className: "text-xs text-slate-300 font-medium block",
-							children: "Cole sua chave de API:"
+							children: "Cole sua chave do Google AI Studio:"
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "relative",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -63517,6 +64105,143 @@ var ApiSettingsView = ({ isAiReady = false, onShowToast, onApiKeySaved }) => {
 							disabled: isValidating || !apiKey.trim(),
 							className: `px-6 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${isValidating || !apiKey.trim() ? "bg-white/10 text-slate-500 cursor-not-allowed" : "bg-gradient-to-r from-cyan-400 to-emerald-400 text-slate-950 hover:brightness-105 shadow-lg shadow-cyan-500/20"}`,
 							children: isValidating ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LoaderCircle, { className: "w-3.5 h-3.5 animate-spin" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Testando..." })] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Check, { className: "w-4 h-4" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Salvar e Validar" })] })
+						})]
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fd-panel rounded-3xl p-6 sm:p-7 space-y-5",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "flex items-start justify-between border-b border-white/10 pb-3.5 gap-3",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex items-center gap-3",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/25 flex items-center justify-center shrink-0",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Zap, { className: "w-4 h-4 text-amber-300" })
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+								className: "text-sm font-semibold text-white",
+								children: "Provedores Alternativos Gratuitos (Zero Erro 503 do Google)"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "text-xs text-slate-400",
+								children: "Se o Gemini estiver congestionado, o app analisa os quadros do vídeo usando estes servidores."
+							})] })]
+						})
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "fd-card rounded-2xl p-4 space-y-3",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex flex-wrap items-center justify-between gap-2",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "flex items-center gap-2",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "w-4 h-4 text-emerald-300" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "text-xs font-bold text-white",
+									children: "1. Groq Cloud (Llama 4 Vision — Grátis e Ultra-Rápido)"
+								})]
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "flex items-center gap-3 text-xs",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
+										href: "https://console.groq.com/keys",
+										target: "_blank",
+										rel: "noreferrer",
+										className: "text-cyan-300 hover:text-cyan-200 underline inline-flex items-center gap-1",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Criar chave grátis" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExternalLink, { className: "w-3 h-3" })]
+									}),
+									groqStatus === "valid" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "text-emerald-300 font-mono font-semibold",
+										children: "Conectada"
+									}),
+									groqStatus === "invalid" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "text-rose-300 font-mono font-semibold",
+										children: "Inválida"
+									})
+								]
+							})]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex flex-col sm:flex-row gap-2",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "relative flex-1",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: showGroqKey ? "text" : "password",
+									value: groqKey,
+									onChange: (e) => {
+										setGroqKey(e.target.value);
+										setGroqStatus("idle");
+									},
+									placeholder: "gsk_... (cole sua chave gratuita do Groq)",
+									className: "w-full bg-black/50 border border-white/15 rounded-xl pl-3.5 pr-10 py-2.5 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-400 font-mono"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									onClick: () => setShowGroqKey(!showGroqKey),
+									className: "absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-white",
+									children: showGroqKey ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(EyeOff, { className: "w-3.5 h-3.5" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Eye, { className: "w-3.5 h-3.5" })
+								})]
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								disabled: isValidatingGroq,
+								onClick: handleSaveGroq,
+								className: "px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold flex items-center justify-center gap-1.5 shrink-0",
+								children: [isValidatingGroq ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LoaderCircle, { className: "w-3.5 h-3.5 animate-spin" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Check, { className: "w-3.5 h-3.5 text-emerald-300" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: groqKey.trim() ? "Validar Groq" : savedGroqKey ? "Remover" : "Salvar" })]
+							})]
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "fd-card rounded-2xl p-4 space-y-3",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex flex-wrap items-center justify-between gap-2",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "flex items-center gap-2",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sparkles, { className: "w-4 h-4 text-cyan-300" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "text-xs font-bold text-white",
+									children: "2. OpenRouter (Gemma 3 / Qwen VL :free — Grátis)"
+								})]
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "flex items-center gap-3 text-xs",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
+										href: "https://openrouter.ai/keys",
+										target: "_blank",
+										rel: "noreferrer",
+										className: "text-cyan-300 hover:text-cyan-200 underline inline-flex items-center gap-1",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Criar chave grátis" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExternalLink, { className: "w-3 h-3" })]
+									}),
+									openRouterStatus === "valid" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "text-emerald-300 font-mono font-semibold",
+										children: "Conectada"
+									}),
+									openRouterStatus === "invalid" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "text-rose-300 font-mono font-semibold",
+										children: "Inválida"
+									})
+								]
+							})]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex flex-col sm:flex-row gap-2",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "relative flex-1",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: showOpenRouterKey ? "text" : "password",
+									value: openRouterKey,
+									onChange: (e) => {
+										setOpenRouterKey(e.target.value);
+										setOpenRouterStatus("idle");
+									},
+									placeholder: "sk-or-... (cole sua chave gratuita do OpenRouter)",
+									className: "w-full bg-black/50 border border-white/15 rounded-xl pl-3.5 pr-10 py-2.5 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-400 font-mono"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									onClick: () => setShowOpenRouterKey(!showOpenRouterKey),
+									className: "absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-white",
+									children: showOpenRouterKey ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(EyeOff, { className: "w-3.5 h-3.5" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Eye, { className: "w-3.5 h-3.5" })
+								})]
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								disabled: isValidatingOpenRouter,
+								onClick: handleSaveOpenRouter,
+								className: "px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold flex items-center justify-center gap-1.5 shrink-0",
+								children: [isValidatingOpenRouter ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LoaderCircle, { className: "w-3.5 h-3.5 animate-spin" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Check, { className: "w-3.5 h-3.5 text-emerald-300" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: openRouterKey.trim() ? "Validar OpenRouter" : savedOpenRouterKey ? "Remover" : "Salvar" })]
+							})]
 						})]
 					})
 				]
@@ -100455,25 +101180,27 @@ function App() {
 	}, []);
 	(0, import_react.useEffect)(() => {
 		const checkKeyStatus = async () => {
-			const userKey = localStorage.getItem("francodroid_user_gemini_api_key");
-			if (userKey && userKey.trim()) try {
+			const cfg = getSavedProviderConfig();
+			const userKey = cfg.geminiKey;
+			const hasFallbackProvider = Boolean(cfg.groqKey || cfg.openRouterKey);
+			if (userKey) try {
 				if (await hasBackendServer()) {
 					const data = await (await fetch("./api/ai/validate-key", {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ apiKey: userKey.trim() })
+						body: JSON.stringify({ apiKey: userKey })
 					})).json();
-					setIsAiReady(Boolean(data.valid));
+					setIsAiReady(Boolean(data.valid) || hasFallbackProvider);
 				} else {
-					const data = await validateGeminiKeyDirect(userKey.trim());
-					setIsAiReady(Boolean(data.valid));
+					const data = await validateGeminiKeyDirect(userKey);
+					setIsAiReady(Boolean(data.valid) || hasFallbackProvider);
 				}
 				return;
 			} catch {
-				setIsAiReady(false);
+				setIsAiReady(hasFallbackProvider);
 				return;
 			}
-			setIsAiReady(false);
+			setIsAiReady(hasAnyConfiguredAiProvider());
 		};
 		checkKeyStatus();
 		if (Object.keys(folderReferences).length === 0) {

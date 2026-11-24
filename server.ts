@@ -678,7 +678,6 @@ const EXCLUDED_MODEL_KEYWORDS = [
   'deep-research',
   'robotics',
   'computer-use',
-  'gemma',
   'learnlm',
   'aqa',
   'bison',
@@ -686,7 +685,6 @@ const EXCLUDED_MODEL_KEYWORDS = [
   'gemini-1.0',
   'gemini-1.5',
   'gemini-2.0',
-  'gemini-2.5',
   'thinking',
   '-pro',
   'carbon',
@@ -701,6 +699,10 @@ const PREFERRED_MODEL_ORDER = [
   'gemini-3.5-flash',
   'gemini-3-flash',
   'gemini-3.1-flash',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemma-3-27b-it',
+  'gemma-3-12b-it',
 ];
 
 function rankAndFilterGeminiModels(rawModels: any[]): string[] {
@@ -715,9 +717,10 @@ function rankAndFilterGeminiModels(rawModels: any[]): string[] {
     const cleanName = String(m?.name || '')
       .replace(/^models\//, '')
       .trim();
-    if (!cleanName || !cleanName.startsWith('gemini-')) continue;
-
+    if (!cleanName) continue;
     const lower = cleanName.toLowerCase();
+    if (!lower.startsWith('gemini-') && !lower.startsWith('gemma-3-')) continue;
+    if (lower.startsWith('gemma-3-') && !lower.includes('27b') && !lower.includes('12b')) continue;
     if (EXCLUDED_MODEL_KEYWORDS.some((kw) => lower.includes(kw))) continue;
 
     validNames.push(cleanName);
@@ -731,8 +734,8 @@ function rankAndFilterGeminiModels(rawModels: any[]): string[] {
     if (ia !== -1 && ib !== -1) return ia - ib;
     if (ia !== -1) return -1;
     if (ib !== -1) return 1;
-    const aFlash = a.includes('flash') ? 0 : 1;
-    const bFlash = b.includes('flash') ? 0 : 1;
+    const aFlash = a.includes('flash') ? 0 : a.startsWith('gemma-') ? 2 : 1;
+    const bFlash = b.includes('flash') ? 0 : b.startsWith('gemma-') ? 2 : 1;
     if (aFlash !== bFlash) return aFlash - bFlash;
     return b.localeCompare(a);
   });
@@ -745,13 +748,14 @@ const DEFAULT_SERVER_FALLBACK_MODELS = [
   'gemini-3.8-flash',
   'gemini-3.1-flash-lite',
   'gemini-3-flash',
+  'gemma-3-27b-it',
 ];
 
 async function discoverAvailableGeminiModels(apiKey: string): Promise<string[]> {
   const cacheKey = hashApiKey(apiKey);
   const cached = discoveredModelsCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < 10 * 60 * 1000 && cached.models.length > 0) {
-    return cached.models.slice(0, 4);
+    return cached.models.slice(0, 6);
   }
 
   try {
@@ -769,8 +773,8 @@ async function discoverAvailableGeminiModels(apiKey: string): Promise<string[]> 
       const ranked = rankAndFilterGeminiModels(data?.models || []);
       if (ranked.length > 0) {
         discoveredModelsCache.set(cacheKey, { models: ranked, fetchedAt: Date.now() });
-        console.log('[FrancoDroid AI] Modelos rápidos descobertos:', ranked.slice(0, 4));
-        return ranked.slice(0, 4);
+        console.log('[FrancoDroid AI] Modelos rápidos descobertos:', ranked.slice(0, 6));
+        return ranked.slice(0, 6);
       }
     }
   } catch (err: any) {
@@ -1358,6 +1362,7 @@ async function runAnalysisJob(
     useServerGabarito?: boolean;
     splitMode?: 'auto' | 'parts' | 'single';
     clientTrainingExamples?: any[];
+    preferredGeminiModel?: string;
     apiKey: string;
   }
 ) {
@@ -1582,10 +1587,22 @@ DETALHES CRÍTICOS:
       ];
 
       const discovered = await discoverAvailableGeminiModels(params.apiKey);
-      const candidatePool = options.pinnedModel
+      const prefModel =
+        params.preferredGeminiModel && params.preferredGeminiModel !== 'auto'
+          ? String(params.preferredGeminiModel).trim()
+          : '';
+      const rawPool = options.pinnedModel
         ? [options.pinnedModel, ...discovered.filter((m) => m !== options.pinnedModel)]
+        : prefModel
+        ? [prefModel, ...discovered.filter((m) => m !== prefModel)]
         : discovered;
-      const baseModels = Array.from(new Set(candidatePool)).slice(0, 4);
+      const isVideoMedia = String(
+        mediaPart?.inlineData?.mimeType || mediaPart?.fileData?.mimeType || ''
+      ).startsWith('video/');
+      const filteredPool = isVideoMedia
+        ? rawPool.filter((m) => !m.startsWith('gemma-'))
+        : rawPool;
+      const baseModels = Array.from(new Set(filteredPool)).slice(0, 6);
 
       const perModelTimeoutMs = options.isMultiPart ? 38000 : 50000;
       let lastError: any = null;
@@ -1607,7 +1624,12 @@ DETALHES CRÍTICOS:
           message: statusMessage,
         });
 
+        const isGemma = modelCandidate.startsWith('gemma-');
+
         const buildRequestConfig = (includeAdvancedParams: boolean) => {
+          if (isGemma) {
+            return { temperature: 0.1 };
+          }
           const cfg: any = {
             systemInstruction: `Você é um árbitro rigoroso da FLL (BIOGLOW). Retorne estritamente JSON válido. Nunca invente missões não executadas no vídeo. Códigos permitidos: [${allowedCodesList.join(', ')}].`,
             responseMimeType: 'application/json',
@@ -1665,6 +1687,18 @@ DETALHES CRÍTICOS:
           return cfg;
         };
 
+        const partsToSend = isGemma
+          ? [
+              ...referenceParts,
+              ...trainingParts,
+              { text: 'MÍDIA DO ROUND:' },
+              mediaPart,
+              {
+                text: `Você é um árbitro rigoroso da FLL (BIOGLOW). Códigos permitidos: [${allowedCodesList.join(', ')}].\n${promptText}\nResponda SOMENTE com JSON válido contendo: estimatedTotalScore, totalTimeFormatted, totalTimeSeconds, overallConfidence, summary, trajectoryNotes, mechanismNotes, missionsDetected.`,
+              },
+            ]
+          : multimodalParts;
+
         const timeoutPromise = new Promise((_, reject) =>
           setTimeout(
             () =>
@@ -1681,30 +1715,42 @@ DETALHES CRÍTICOS:
         try {
           const generatePromise = aiClient.models.generateContent({
             model: modelCandidate,
-            contents: { parts: multimodalParts },
+            contents: { parts: partsToSend },
             config: buildRequestConfig(true),
           });
           response = await Promise.race([generatePromise, timeoutPromise]);
         } catch (firstErr: any) {
           const firstMsg = String(firstErr?.message || '');
           const isArgError =
-            firstMsg.includes('INVALID_ARGUMENT') ||
-            firstMsg.includes('400') ||
-            firstMsg.toLowerCase().includes('thinking') ||
-            firstMsg.toLowerCase().includes('mediaresolution');
+            !isGemma &&
+            (firstMsg.includes('INVALID_ARGUMENT') ||
+              firstMsg.includes('400') ||
+              firstMsg.toLowerCase().includes('thinking') ||
+              firstMsg.toLowerCase().includes('mediaresolution'));
 
           if (!isArgError) throw firstErr;
 
           const retryPromise = aiClient.models.generateContent({
             model: modelCandidate,
-            contents: { parts: multimodalParts },
+            contents: { parts: partsToSend },
             config: buildRequestConfig(false),
           });
           response = await Promise.race([retryPromise, timeoutPromise]);
         }
 
-        const rawJson = (response.text ?? '{}').trim();
-        const parsedData = JSON.parse(rawJson);
+        const rawJson = (response.text ?? '{}')
+          .trim()
+          .replace(/^```(?:json)?\s*/i, '')
+          .replace(/\s*```$/i, '')
+          .trim();
+        let parsedData: any;
+        try {
+          parsedData = JSON.parse(rawJson);
+        } catch {
+          const m = rawJson.match(/\{[\s\S]*\}/);
+          if (!m) throw new Error('Resposta fora do formato JSON esperado.');
+          parsedData = JSON.parse(m[0]);
+        }
         console.log(`[FrancoDroid AI] Sucesso (${stepPrefix}) com ${modelCandidate}!`);
         return { parsedData, successfulModel: modelCandidate };
       };
@@ -2207,6 +2253,7 @@ app.post('/api/ai/analyze-mat', handleMediaUpload, (req: Request, res: Response)
     useServerGabarito = true,
     splitMode = 'auto',
     clientTrainingExamples = [],
+    preferredGeminiModel = 'auto',
     userApiKey = '',
   } = bodyPayload;
 
@@ -2270,6 +2317,7 @@ app.post('/api/ai/analyze-mat', handleMediaUpload, (req: Request, res: Response)
     useServerGabarito,
     splitMode,
     clientTrainingExamples,
+    preferredGeminiModel,
     apiKey,
   });
 

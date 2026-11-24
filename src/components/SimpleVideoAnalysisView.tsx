@@ -48,7 +48,9 @@ import { validateMissionReference } from '../utils/folderParser';
 import {
   analyzeMediaClientSide,
   formatClientGeminiError,
+  getSavedProviderConfig,
   hasBackendServer,
+  isTransientOverloadError,
 } from '../services/clientAiEngine';
 
 interface SimpleVideoAnalysisViewProps {
@@ -614,11 +616,60 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
     return uploadId;
   };
 
-  const handleAnalyze = async (overrideSplitMode?: 'auto' | 'parts' | 'single') => {
-    const activeSplitMode = overrideSplitMode || splitMode;
-    const savedApiKey = localStorage.getItem('francodroid_user_gemini_api_key')?.trim() || '';
-    if (!savedApiKey) {
-      onShowToast('Conecte sua chave da IA acima (Passo 2) antes de analisar.', 'error');
+  const startManualScoring = () => {
+    const dur = videoDuration ? Math.round(videoDuration) : 60;
+    const mins = Math.floor(dur / 60);
+    const secs = dur % 60;
+    const formatted = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    const prefilled: DetectedMissionItem[] = informedMissions.map((code) => {
+      const m = BIOGLOW_OFFICIAL_MISSIONS.find((bm) => bm.code === code);
+      const pts = m?.maxScore || 20;
+      return {
+        missionCode: code,
+        status: 'completed',
+        estimatedScore: pts,
+        timestampEstimate: formatted,
+        evidenceDescription: 'Marcado manualmente pelo operador assistindo ao vídeo.',
+        confidence: 100,
+      };
+    });
+    const manualResult: AnalysisResultData = {
+      modelUsed: 'manual-offline',
+      estimatedTotalScore: prefilled.reduce((s, m) => s + m.estimatedScore, 0),
+      totalTimeFormatted: formatted,
+      totalTimeSeconds: dur,
+      overallConfidence: 100,
+      summary: 'Apuração manual direta pelo vídeo (sem dependência da IA). Ajuste ou adicione as missões abaixo e salve no histórico.',
+      trajectoryNotes: '',
+      mechanismNotes: '',
+      missionsDetected: prefilled,
+      usedGabarito: false,
+      gabaritoWarning:
+        'Modo Manual ativado: adicione ou edite as missões abaixo enquanto assiste ao vídeo acima e clique em Salvar no Histórico.',
+    };
+    setLastErrorMsg(null);
+    setResult(manualResult);
+    setOriginalAiMissions([]);
+    setEditableMissions(prefilled);
+    setEditableTime(dur);
+    setTrainingSavedForRun(false);
+    onShowToast('Modo Manual ativado! Marque as missões abaixo e salve.', 'info');
+    setTimeout(() => {
+      resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 120);
+  };
+
+  const handleAnalyze = async (options?: {
+    overrideSplitMode?: 'auto' | 'parts' | 'single';
+    forceKeyframes?: boolean;
+    overrideModel?: string;
+  }) => {
+    const activeSplitMode = options?.overrideSplitMode || splitMode;
+    const providerCfg = getSavedProviderConfig();
+    const savedApiKey = providerCfg.geminiKey;
+    const hasAnyKey = Boolean(savedApiKey || providerCfg.groqKey || providerCfg.openRouterKey);
+    if (!hasAnyKey) {
+      onShowToast('Conecte sua chave da IA (Gemini, Groq ou OpenRouter) antes de analisar.', 'error');
       return;
     }
 
@@ -648,7 +699,9 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
     activeAbortRef.current = abortCtrl;
 
     setAnalysisStep(
-      isVideo
+      options?.forceKeyframes
+        ? 'Extraindo quadros-chave leves (modo anti-503)...'
+        : isVideo
         ? `Preparando envio de vídeo (${mediaSizeMb.toFixed(1)} MB)...`
         : 'Enviando foto da mesa...'
     );
@@ -658,26 +711,40 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
       setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
     }, 1000);
 
+    const runClientEngine = () =>
+      analyzeMediaClientSide({
+        mediaFile,
+        isVideo,
+        videoDuration,
+        informedMissions,
+        references,
+        trainingExamples,
+        splitMode: activeSplitMode,
+        apiKey: savedApiKey,
+        groqApiKey: providerCfg.groqKey,
+        openRouterApiKey: providerCfg.openRouterKey,
+        providerPref: providerCfg.providerPref,
+        preferredGeminiModel: options?.overrideModel || providerCfg.preferredGeminiModel,
+        forceKeyframes: options?.forceKeyframes,
+        signal: abortCtrl.signal,
+        onProgress: (pct, msg) => {
+          setAnalysisPercent(pct);
+          setAnalysisStep(msg);
+        },
+      });
+
     try {
       let resData: AnalysisResultData;
       const serverOnline = await hasBackendServer();
+      const shouldUseClientDirectly =
+        !serverOnline ||
+        Boolean(options?.forceKeyframes) ||
+        providerCfg.providerPref === 'groq' ||
+        providerCfg.providerPref === 'openrouter' ||
+        !savedApiKey;
 
-      if (!serverOnline) {
-        resData = await analyzeMediaClientSide({
-          mediaFile,
-          isVideo,
-          videoDuration,
-          informedMissions,
-          references,
-          trainingExamples,
-          splitMode: activeSplitMode,
-          apiKey: savedApiKey,
-          signal: abortCtrl.signal,
-          onProgress: (pct, msg) => {
-            setAnalysisPercent(pct);
-            setAnalysisStep(msg);
-          },
-        });
+      if (shouldUseClientDirectly) {
+        resData = await runClientEngine();
       } else {
       const scopeCodes =
         informedMissions.length > 0
@@ -773,6 +840,7 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
         useServerGabarito: validGabaritoKeys.length > 0,
         splitMode: activeSplitMode,
         clientTrainingExamples: clientTrainingPayload,
+        preferredGeminiModel: options?.overrideModel || providerCfg.preferredGeminiModel,
         userApiKey: savedApiKey,
         missions: payloadMissions,
       };
@@ -865,79 +933,114 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
       if (cancelRequestedRef.current) return;
 
       let serverResData: AnalysisResultData;
-      if (startResponse.jobId) {
-        const jobId = String(startResponse.jobId);
-        activeJobIdRef.current = jobId;
-        setAnalysisPercent(30);
-        setAnalysisStep('Preparando mídia no servidor...');
+      try {
+        if (startResponse.jobId) {
+          const jobId = String(startResponse.jobId);
+          activeJobIdRef.current = jobId;
+          setAnalysisPercent(30);
+          setAnalysisStep('Preparando mídia no servidor...');
 
-        const absoluteMaxWaitMs = 360000;
-        const stallTimeoutMs = 110000;
-        const pollStart = Date.now();
-        let lastActivityAt = Date.now();
-        let lastServerSig = '';
-        let lastStepSnapshot = 'Preparando mídia no servidor...';
+          const absoluteMaxWaitMs = 360000;
+          const stallTimeoutMs = 110000;
+          const pollStart = Date.now();
+          let lastActivityAt = Date.now();
+          let lastServerSig = '';
+          let lastStepSnapshot = 'Preparando mídia no servidor...';
 
-        while (true) {
-          if (cancelRequestedRef.current) {
-            throw new Error('ABORTED');
-          }
-          const now = Date.now();
-          if (now - lastActivityAt > stallTimeoutMs) {
-            throw new Error(
-              activeSplitMode === 'parts'
-                ? `A IA ficou sem resposta por mais de 110s na etapa "${lastStepSnapshot}". Informe apenas as missões feitas acima para acelerar ou corte um trecho menor (15–30s) no Cortador.`
-                : `A IA ficou sem resposta por mais de 110s na etapa "${lastStepSnapshot}". Use "Dividir em Partes" ou corte apenas o trecho das missões.`
-            );
-          }
-          if (now - pollStart > absoluteMaxWaitMs) {
-            throw new Error(
-              activeSplitMode === 'parts'
-                ? 'O vídeo demorou mais de 6 minutos mesmo dividido em partes. Informe apenas as missões feitas acima ou corte um trecho de 15–30s no Cortador.'
-                : 'A IA demorou mais de 6 minutos. Use "Dividir em Partes" ou corte apenas o trecho das missões.'
-            );
-          }
+          while (true) {
+            if (cancelRequestedRef.current) {
+              throw new Error('ABORTED');
+            }
+            const now = Date.now();
+            if (now - lastActivityAt > stallTimeoutMs) {
+              throw new Error(
+                activeSplitMode === 'parts'
+                  ? `A IA ficou sem resposta por mais de 110s na etapa "${lastStepSnapshot}". Informe apenas as missões feitas acima para acelerar ou corte um trecho menor (15–30s) no Cortador.`
+                  : `A IA ficou sem resposta por mais de 110s na etapa "${lastStepSnapshot}". Use "Dividir em Partes" ou corte apenas o trecho das missões.`
+              );
+            }
+            if (now - pollStart > absoluteMaxWaitMs) {
+              throw new Error(
+                activeSplitMode === 'parts'
+                  ? 'O vídeo demorou mais de 6 minutos mesmo dividido em partes. Informe apenas as missões feitas acima ou corte um trecho de 15–30s no Cortador.'
+                  : 'A IA demorou mais de 6 minutos. Use "Dividir em Partes" ou corte apenas o trecho das missões.'
+              );
+            }
 
-          await new Promise((r) => setTimeout(r, 1100));
-          if (cancelRequestedRef.current) {
-            throw new Error('ABORTED');
-          }
+            await new Promise((r) => setTimeout(r, 1100));
+            if (cancelRequestedRef.current) {
+              throw new Error('ABORTED');
+            }
 
-          const pollRes = await fetch(`/api/ai/jobs/${encodeURIComponent(jobId)}`);
-          const jobData = await parseFetchJsonSafely(pollRes, 'acompanhar análise');
+            const pollRes = await fetch(`/api/ai/jobs/${encodeURIComponent(jobId)}`);
+            const jobData = await parseFetchJsonSafely(pollRes, 'acompanhar análise');
 
-          const serverSig = `${jobData.stage ?? ''}|${jobData.progress ?? ''}|${jobData.message ?? ''}|${jobData.updatedAt ?? ''}`;
-          if (serverSig !== lastServerSig) {
-            lastServerSig = serverSig;
-            lastActivityAt = Date.now();
-          }
+            const serverSig = `${jobData.stage ?? ''}|${jobData.progress ?? ''}|${jobData.message ?? ''}|${jobData.updatedAt ?? ''}`;
+            if (serverSig !== lastServerSig) {
+              lastServerSig = serverSig;
+              lastActivityAt = Date.now();
+            }
 
-          if (typeof jobData.progress === 'number') {
-            setAnalysisPercent((prev) => Math.max(prev, Math.min(98, jobData.progress)));
-          }
-          if (jobData.message) {
-            lastStepSnapshot = jobData.message;
-            setAnalysisStep(jobData.message);
-          }
+            if (typeof jobData.progress === 'number') {
+              setAnalysisPercent((prev) => Math.max(prev, Math.min(98, jobData.progress)));
+            }
+            if (jobData.message) {
+              lastStepSnapshot = jobData.message;
+              setAnalysisStep(jobData.message);
+            }
 
-          if (jobData.stage === 'done' && jobData.analysis) {
-            serverResData = jobData.analysis;
-            break;
+            if (jobData.stage === 'done' && jobData.analysis) {
+              serverResData = jobData.analysis;
+              break;
+            }
+            if (jobData.stage === 'error') {
+              throw new Error(jobData.error || 'Erro durante a análise na IA.');
+            }
+            if (jobData.stage === 'cancelled') {
+              throw new Error('ABORTED');
+            }
           }
-          if (jobData.stage === 'error') {
-            throw new Error(jobData.error || 'Erro durante a análise na IA.');
-          }
-          if (jobData.stage === 'cancelled') {
-            throw new Error('ABORTED');
-          }
+        } else if (startResponse.analysis) {
+          serverResData = startResponse.analysis;
+        } else {
+          throw new Error('Resposta inesperada do servidor.');
         }
-      } else if (startResponse.analysis) {
-        serverResData = startResponse.analysis;
-      } else {
-        throw new Error('Resposta inesperada do servidor.');
-      }
 
-      resData = serverResData;
+        resData = serverResData;
+      } catch (srvErr: any) {
+        if (srvErr?.message === 'ABORTED' || cancelRequestedRef.current) {
+          throw srvErr;
+        }
+        // Automatic anti-503 fallback: switch from heavy MP4 server job to lightweight JPEG keyframes + alternative providers!
+        if (isVideo && isTransientOverloadError(srvErr)) {
+          setAnalysisStep(
+            'Servidor congestionado (503). Ativando alternativa automática por quadros-chave leves...'
+          );
+          setAnalysisPercent(35);
+          resData = await analyzeMediaClientSide({
+            mediaFile,
+            isVideo: true,
+            videoDuration,
+            informedMissions,
+            references,
+            trainingExamples,
+            splitMode: 'parts',
+            apiKey: savedApiKey,
+            groqApiKey: providerCfg.groqKey,
+            openRouterApiKey: providerCfg.openRouterKey,
+            providerPref: providerCfg.providerPref,
+            preferredGeminiModel: options?.overrideModel || providerCfg.preferredGeminiModel,
+            forceKeyframes: true,
+            signal: abortCtrl.signal,
+            onProgress: (pct, msg) => {
+              setAnalysisPercent(pct);
+              setAnalysisStep(msg);
+            },
+          });
+        } else {
+          throw srvErr;
+        }
+      }
       }
 
       activeJobIdRef.current = null;
@@ -1761,9 +1864,9 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
           </div>
         )}
 
-        {/* Inline Error Card with Context-Aware Retry */}
+        {/* Inline Error Card with Concrete Alternatives */}
         {lastErrorMsg && !isAnalyzing && (
-          <div className="rounded-2xl p-4 border border-rose-500/40 bg-rose-950/25 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-left fd-fade-up">
+          <div className="rounded-2xl p-4 sm:p-5 border border-rose-500/40 bg-rose-950/25 space-y-3 text-left fd-fade-up">
             <div className="flex items-start gap-2.5">
               <XCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
               <div className="text-xs">
@@ -1771,67 +1874,112 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
                 <p className="text-slate-300 mt-0.5 leading-relaxed">{lastErrorMsg}</p>
               </div>
             </div>
-            {isVideo && (
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
+
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              {isVideo && (
                 <button
                   type="button"
                   onClick={() => {
-                    if (splitMode !== 'parts') {
-                      setSplitMode('parts');
-                      void handleAnalyze('parts');
-                    } else {
-                      void handleAnalyze('parts');
-                    }
+                    setSplitMode('parts');
+                    void handleAnalyze({ overrideSplitMode: 'parts', forceKeyframes: true });
                   }}
                   className="px-3 py-2 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-bold flex items-center gap-1.5"
                 >
                   <Layers className="w-3.5 h-3.5" />
-                  <span>{splitMode === 'parts' ? 'Tentar em Partes Novamente' : 'Dividir em Partes e Tentar'}</span>
+                  <span>Analisar por Quadros (Anti-503)</span>
                 </button>
-                {!showTrimmer && (
-                  <button
-                    type="button"
-                    onClick={() => setShowTrimmer(true)}
-                    className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5"
-                  >
-                    <Scissors className="w-3.5 h-3.5 text-cyan-300" />
-                    <span>Cortar Vídeo</span>
-                  </button>
-                )}
-              </div>
-            )}
+              )}
+
+              <button
+                type="button"
+                onClick={() =>
+                  void handleAnalyze({
+                    forceKeyframes: isVideo,
+                    overrideSplitMode: isVideo ? 'parts' : undefined,
+                    overrideModel: 'gemma-3-27b-it',
+                  })
+                }
+                className="px-3 py-2 rounded-xl bg-emerald-400/20 hover:bg-emerald-400/30 text-emerald-200 border border-emerald-400/30 text-xs font-semibold flex items-center gap-1.5"
+              >
+                <Cpu className="w-3.5 h-3.5" />
+                <span>Tentar c/ Gemma 3 / Flash-Lite</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onNavigateToApi}
+                className="px-3 py-2 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 text-amber-200 border border-amber-400/30 text-xs font-semibold flex items-center gap-1.5"
+              >
+                <Key className="w-3.5 h-3.5" />
+                <span>Usar Groq / OpenRouter (Grátis)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={startManualScoring}
+                className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5"
+              >
+                <FileText className="w-3.5 h-3.5 text-cyan-300" />
+                <span>Marcar Pontos Manualmente (Sem IA)</span>
+              </button>
+
+              {isVideo && !showTrimmer && (
+                <button
+                  type="button"
+                  onClick={() => setShowTrimmer(true)}
+                  className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5"
+                >
+                  <Scissors className="w-3.5 h-3.5 text-cyan-300" />
+                  <span>Cortar Vídeo</span>
+                </button>
+              )}
+            </div>
           </div>
         )}
 
-        {/* Analyze Button */}
-        <button
-          type="button"
-          disabled={!mediaFile || isAnalyzing || isOverMaxLimit}
-          onClick={() => void handleAnalyze()}
-          className={`w-full py-3.5 rounded-xl font-bold text-xs tracking-wide transition-all flex items-center justify-center gap-2 ${
-            !mediaFile || isAnalyzing || isOverMaxLimit
-              ? 'bg-white/5 text-slate-500 cursor-not-allowed border border-white/10'
-              : 'bg-gradient-to-r from-cyan-400 to-emerald-400 text-slate-950 hover:brightness-105 shadow-xl shadow-cyan-500/20 active:scale-[0.99]'
-          }`}
-        >
-          {isAnalyzing ? (
-            <>
-              <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-              <span>Analisando ({elapsedSeconds}s)...</span>
-            </>
-          ) : (
-            <>
-              <Sparkles className="w-4 h-4" />
-              <span>
-                {!isAiReady
-                  ? 'Conecte a Chave da IA acima para Analisar'
-                  : splitMode === 'parts' && isVideo
-                  ? 'Dividir em Partes e Analisar com IA'
-                  : 'Analisar Vídeo com IA'}
-              </span>
-            </>
+        {/* Analyze Button + Instant Manual Alternative */}
+        <div className="flex flex-col sm:flex-row gap-2.5">
+          <button
+            type="button"
+            disabled={!mediaFile || isAnalyzing || isOverMaxLimit}
+            onClick={() => void handleAnalyze()}
+            className={`flex-1 py-3.5 rounded-xl font-bold text-xs tracking-wide transition-all flex items-center justify-center gap-2 ${
+              !mediaFile || isAnalyzing || isOverMaxLimit
+                ? 'bg-white/5 text-slate-500 cursor-not-allowed border border-white/10'
+                : 'bg-gradient-to-r from-cyan-400 to-emerald-400 text-slate-950 hover:brightness-105 shadow-xl shadow-cyan-500/20 active:scale-[0.99]'
+            }`}
+          >
+            {isAnalyzing ? (
+              <>
+                <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                <span>Analisando ({elapsedSeconds}s)...</span>
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-4 h-4" />
+                <span>
+                  {!isAiReady
+                    ? 'Conecte uma Chave de IA (Gemini, Groq ou OpenRouter)'
+                    : splitMode === 'parts' && isVideo
+                    ? 'Dividir em Partes e Analisar com IA'
+                    : 'Analisar Vídeo com IA'}
+                </span>
+              </>
+            )}
+          </button>
+
+          {mediaFile && !isAnalyzing && (
+            <button
+              type="button"
+              onClick={startManualScoring}
+              className="px-4 py-3.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-slate-200 text-xs font-semibold flex items-center justify-center gap-1.5 shrink-0 transition-all"
+              title="Preencher pontuação manualmente assistindo ao vídeo sem depender de IA"
+            >
+              <FileText className="w-3.5 h-3.5 text-cyan-300" />
+              <span>Marcar Manual</span>
+            </button>
           )}
-        </button>
+        </div>
       </div>
 
       {/* Results, Manual Corrections & REAL AI Training */}

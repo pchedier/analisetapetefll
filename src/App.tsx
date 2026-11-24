@@ -9,6 +9,8 @@ import { ToastContainer, ToastMessage } from './components/Toast';
 import { StorageService } from './services/storageService';
 import { CloudSyncService } from './services/cloudSyncService';
 import {
+  getSavedProviderConfig,
+  hasAnyConfiguredAiProvider,
   hasBackendServer,
   loadStaticTeamGabarito,
   validateGeminiKeyDirect,
@@ -116,28 +118,31 @@ export default function App() {
   // Check user API key & restore cached server gabarito if browser storage empty
   useEffect(() => {
     const checkKeyStatus = async () => {
-      const userKey = localStorage.getItem('francodroid_user_gemini_api_key');
-      if (userKey && userKey.trim()) {
+      const cfg = getSavedProviderConfig();
+      const userKey = cfg.geminiKey;
+      const hasFallbackProvider = Boolean(cfg.groqKey || cfg.openRouterKey);
+
+      if (userKey) {
         try {
           if (await hasBackendServer()) {
             const res = await fetch('./api/ai/validate-key', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ apiKey: userKey.trim() }),
+              body: JSON.stringify({ apiKey: userKey }),
             });
             const data = await res.json();
-            setIsAiReady(Boolean(data.valid));
+            setIsAiReady(Boolean(data.valid) || hasFallbackProvider);
           } else {
-            const data = await validateGeminiKeyDirect(userKey.trim());
-            setIsAiReady(Boolean(data.valid));
+            const data = await validateGeminiKeyDirect(userKey);
+            setIsAiReady(Boolean(data.valid) || hasFallbackProvider);
           }
           return;
         } catch {
-          setIsAiReady(false);
+          setIsAiReady(hasFallbackProvider);
           return;
         }
       }
-      setIsAiReady(false);
+      setIsAiReady(hasAnyConfiguredAiProvider());
     };
 
     checkKeyStatus();
