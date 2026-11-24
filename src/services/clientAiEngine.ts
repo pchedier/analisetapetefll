@@ -940,6 +940,67 @@ function mergeClientPartAnalyses(
   };
 }
 
+interface CachedCompletedSegment {
+  index: number;
+  startSec: number;
+  endSec: number;
+  successfulModel: string;
+  sanitized: any;
+}
+
+const segmentCheckpointStore = new Map<
+  string,
+  { totalParts: number; segments: Map<number, CachedCompletedSegment> }
+>();
+const frameCacheStore = new Map<string, Array<{ timestampSec: number; base64Data: string }>>();
+
+export function buildVideoCheckpointBaseKey(file: File, informedMissions: string[]): string {
+  const cleaned = informedMissions
+    .map((c) => c.trim().toUpperCase())
+    .filter(Boolean)
+    .sort()
+    .join(',');
+  return `${file.name}|${file.size}|${file.lastModified}|${cleaned}`;
+}
+
+export function getVideoAnalysisCheckpoint(
+  file: File | null | undefined,
+  informedMissions: string[]
+): {
+  totalParts: number;
+  completedCount: number;
+  remainingCount: number;
+  completedIndices: number[];
+} | null {
+  if (!file) return null;
+  const prefix = `${buildVideoCheckpointBaseKey(file, informedMissions)}|`;
+  for (const [key, entry] of segmentCheckpointStore.entries()) {
+    if (key.startsWith(prefix) && entry.segments.size > 0 && entry.segments.size < entry.totalParts) {
+      const completedIndices = Array.from(entry.segments.keys()).sort((a, b) => a - b);
+      return {
+        totalParts: entry.totalParts,
+        completedCount: completedIndices.length,
+        remainingCount: Math.max(0, entry.totalParts - completedIndices.length),
+        completedIndices,
+      };
+    }
+  }
+  return null;
+}
+
+export function clearVideoAnalysisCheckpoint(
+  file: File | null | undefined,
+  informedMissions?: string[]
+): void {
+  if (!file) return;
+  const prefix = informedMissions
+    ? `${buildVideoCheckpointBaseKey(file, informedMissions)}|`
+    : `${file.name}|${file.size}|${file.lastModified}|`;
+  for (const key of Array.from(segmentCheckpointStore.keys())) {
+    if (key.startsWith(prefix)) segmentCheckpointStore.delete(key);
+  }
+}
+
 export async function analyzeMediaClientSide(params: {
   mediaFile: File;
   isVideo: boolean;
@@ -954,6 +1015,7 @@ export async function analyzeMediaClientSide(params: {
   providerPref?: AiProviderPref;
   preferredGeminiModel?: string;
   forceKeyframes?: boolean;
+  resetCheckpoint?: boolean;
   signal?: AbortSignal;
   onProgress: (percent: number, message: string) => void;
 }) {
@@ -1118,6 +1180,20 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
   ]
 }`;
 
+  // Track per-run cooldowns & last working provider/model so rate-limited models aren't hammered again
+  const modelCooldownUntil = new Map<string, number>();
+  let stickyThirdPartyRoute: { provider: 'groq' | 'openrouter'; model: string } | null = null;
+
+  const isModelCooledDown = (key: string) => (modelCooldownUntil.get(key) || 0) > Date.now();
+  const markModelCooldown = (key: string, err: any) => {
+    const msg = extractGeminiErrorText(err).toLowerCase();
+    const isQuotaOr429 =
+      msg.includes('429') || msg.includes('resource_exhausted') || msg.includes('quota') || msg.includes('rate limit');
+    const isMissing = msg.includes('404') || msg.includes('not_found') || msg.includes('does not exist');
+    const ms = isMissing ? 180_000 : isQuotaOr429 ? 50_000 : 22_000;
+    modelCooldownUntil.set(key, Date.now() + ms);
+  };
+
   const runOpenAiCompatibleVision = async (
     provider: 'groq' | 'openrouter',
     providerKey: string,
@@ -1144,6 +1220,19 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
     } else {
       modelsToTry = await discoverOpenRouterVisionModels();
     }
+
+    // Prioritize sticky working third-party model & skip/deprioritize rate-limited ones
+    if (stickyThirdPartyRoute?.provider === provider) {
+      modelsToTry = [
+        stickyThirdPartyRoute.model,
+        ...modelsToTry.filter((m) => m !== stickyThirdPartyRoute!.model),
+      ];
+    }
+    modelsToTry.sort((a, b) => {
+      const ca = isModelCooledDown(`${provider}:${a}`) ? 1 : 0;
+      const cb = isModelCooledDown(`${provider}:${b}`) ? 1 : 0;
+      return ca - cb;
+    });
 
     // Groq allows max ~3 images total per request; OpenRouter works best with <= 7 images total
     const contentItems: any[] = [];
@@ -1248,6 +1337,7 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
         }
         const rawText = String(data?.choices?.[0]?.message?.content || '');
         const parsedData = extractJsonObjectFromText(rawText);
+        stickyThirdPartyRoute = { provider, model: modelId };
         return {
           parsedData,
           successfulModel: `${provider}:${modelId}`,
@@ -1255,6 +1345,10 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
       } catch (err: any) {
         window.clearTimeout(timer);
         lastThirdPartyErr = err;
+        markModelCooldown(`${provider}:${modelId}`, err);
+        if (stickyThirdPartyRoute?.provider === provider && stickyThirdPartyRoute.model === modelId) {
+          stickyThirdPartyRoute = null;
+        }
         const msg = String(err?.message || '').toLowerCase();
         if (msg.includes('401') || msg.includes('invalid api key') || msg.includes('unauthorized')) {
           throw new Error(
@@ -1336,6 +1430,32 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
       throw new Error('Nenhuma chave de IA configurada. Adicione uma chave Gemini, Groq ou OpenRouter em "Configurar IA".');
     }
 
+    // If Gemini hit limits on an earlier part and a third-party route already proved working, try it first!
+    if (
+      effectiveProviderPref === 'auto' &&
+      canSendToThirdParty &&
+      stickyThirdPartyRoute &&
+      !isModelCooledDown(`${stickyThirdPartyRoute.provider}:${stickyThirdPartyRoute.model}`)
+    ) {
+      const thirdKey =
+        stickyThirdPartyRoute.provider === 'groq' ? effectiveGroqKey : effectiveOpenRouterKey;
+      if (thirdKey) {
+        try {
+          return await runOpenAiCompatibleVision(
+            stickyThirdPartyRoute.provider,
+            thirdKey,
+            mediaParts,
+            promptText,
+            progressPct,
+            stepLabel,
+            Boolean(opts.skipReferences)
+          );
+        } catch {
+          // fall back to Gemini pool below
+        }
+      }
+    }
+
     // For multi-part long videos without an explicit model choice, prioritize Lite / Gemma models (separate lower-503 capacity!)
     const multiPartPreferredOrder = (name: string): number => {
       if (name === 'gemini-3.1-flash-lite') return 0;
@@ -1354,11 +1474,18 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
         ? [...discoveredModels].sort((a, b) => multiPartPreferredOrder(a) - multiPartPreferredOrder(b))
         : discoveredModels;
 
-    const startPool = opts.pinnedModel
+    const rawStartPool = opts.pinnedModel
       ? [opts.pinnedModel, ...basePoolForRun.filter((m) => m !== opts.pinnedModel)]
       : effectivePreferredGemini
       ? [effectivePreferredGemini, ...basePoolForRun.filter((m) => m !== effectivePreferredGemini)]
       : basePoolForRun;
+
+    // Push recently rate-limited / 503 models to the back so healthy models handle the remaining parts immediately
+    const startPool = [...rawStartPool].sort((a, b) => {
+      const ca = isModelCooledDown(a) ? 1 : 0;
+      const cb = isModelCooledDown(b) ? 1 : 0;
+      return ca - cb;
+    });
 
     // Gemma text/vision models cannot parse raw MP4 inline video parts (only images)
     const isVideoPayload = mediaParts.some((p) =>
@@ -1369,7 +1496,7 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
       : startPool;
     const baseModels = Array.from(new Set(filteredPool)).slice(0, 6);
 
-    // Keep reference photos compact during multi-part runs (max 3 imgs) or omit in emergency ultra-compact retry
+    // Keep reference photos compact during multi-part runs (max 2 imgs to respect free TPM) or omit in compact retry
     const activeRefParts = opts.skipReferences
       ? []
       : opts.isMultiPart
@@ -1378,10 +1505,10 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
           let imgCount = 0;
           for (const rp of referenceParts) {
             if (rp?.inlineData?.data) {
-              if (imgCount >= 3) continue;
+              if (imgCount >= 2) continue;
               imgCount++;
               compact.push(rp);
-            } else if (imgCount < 3) {
+            } else if (imgCount < 2) {
               compact.push(rp);
             }
           }
@@ -1538,6 +1665,7 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
         );
       } catch (err: any) {
         lastErr = err;
+        markModelCooldown(modelCandidate, err);
         const rawMsg = extractGeminiErrorText(err);
         if (rawMsg.includes('API_KEY_INVALID') || rawMsg.includes('PERMISSION_DENIED')) break;
 
@@ -1546,9 +1674,9 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
           if (i < baseModels.length - 1) {
             onProgress(
               Math.min(95, progressPct + i * 2 + 1),
-              `Modelo ${modelCandidate} ocupado (503) — alternando para ${baseModels[i + 1]}...`
+              `Modelo ${modelCandidate} ocupado/limite — alternando para ${baseModels[i + 1]}...`
             );
-            await new Promise((r) => window.setTimeout(r, 1000));
+            await new Promise((r) => window.setTimeout(r, 800));
           }
         }
       }
@@ -1728,6 +1856,20 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
     segments.push({ index: i, startSec, endSec });
   }
 
+  const checkpointKey = `${buildVideoCheckpointBaseKey(mediaFile, cleanedInformed)}|${partCount}`;
+  if (params.resetCheckpoint) {
+    segmentCheckpointStore.delete(checkpointKey);
+  }
+  const existingCheckpoint = segmentCheckpointStore.get(checkpointKey);
+  const checkpointMap =
+    existingCheckpoint && existingCheckpoint.totalParts === partCount
+      ? existingCheckpoint.segments
+      : new Map<number, CachedCompletedSegment>();
+  segmentCheckpointStore.set(checkpointKey, {
+    totalParts: partCount,
+    segments: checkpointMap,
+  });
+
   const partResults: Array<{ startSec: number; endSec: number; sanitized: any }> = [];
   let pinnedModel = '';
   let partialWarning = '';
@@ -1739,22 +1881,29 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
   ) => {
     const label = `${formatSecShort(seg.startSec)}–${formatSecShort(seg.endSec)}`;
     const basePct = 28 + Math.round((seg.index / segments.length) * 62);
-    onProgress(
-      basePct,
-      compactRetry
-        ? `Reenviando Parte ${seg.index + 1}/${segments.length} em modo ultra-leve (${label})...`
-        : `Extraindo quadros Parte ${seg.index + 1}/${segments.length} (${label})...`
-    );
+    const frameKey = `${checkpointKey}|${seg.index}|${compactRetry ? 'compact' : 'std'}`;
 
-    const frames = await extractVideoSegmentKeyframes(
-      mediaFile,
-      seg.startSec,
-      seg.endSec,
-      compactRetry ? 4 : 6,
-      signal,
-      compactRetry ? 480 : 640,
-      compactRetry ? 0.65 : 0.72
-    );
+    let frames = frameCacheStore.get(frameKey);
+    if (!frames || frames.length === 0) {
+      onProgress(
+        basePct,
+        compactRetry
+          ? `Reenviando Parte ${seg.index + 1}/${segments.length} em modo ultra-leve (${label})...`
+          : `Extraindo quadros Parte ${seg.index + 1}/${segments.length} (${label})...`
+      );
+
+      frames = await extractVideoSegmentKeyframes(
+        mediaFile,
+        seg.startSec,
+        seg.endSec,
+        compactRetry ? 4 : 5,
+        signal,
+        compactRetry ? 448 : 512,
+        compactRetry ? 0.62 : 0.68
+      );
+      frameCacheStore.set(frameKey, frames);
+    }
+
     const frameParts: any[] = [];
     for (const f of frames) {
       frameParts.push({ text: `[Quadro em ${formatSecShort(f.timestampSec)}]` });
@@ -1792,26 +1941,55 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
     };
   };
 
-  // Run segments SEQUENTIALLY with a gentle cooldown so we never trigger concurrent 503/429 bursts on free keys
+  // Run segments SEQUENTIALLY, skipping any parts already completed in checkpoint!
   const failedSegments: string[] = [];
   let lastSegErr: any = null;
+  let resumedCount = 0;
 
   for (let i = 0; i < segments.length; i++) {
     if (signal?.aborted) throw new Error('ABORTED');
-    if (i > 0) {
+    const seg = segments[i];
+
+    const savedSeg = checkpointMap.get(seg.index);
+    if (savedSeg) {
+      resumedCount++;
+      if (!pinnedModel && savedSeg.successfulModel) {
+        pinnedModel = savedSeg.successfulModel;
+      }
+      onProgress(
+        28 + Math.round(((seg.index + 1) / segments.length) * 62),
+        `Parte ${seg.index + 1}/${segments.length} reaproveitada do checkpoint (${savedSeg.successfulModel})...`
+      );
+      partResults.push({
+        startSec: savedSeg.startSec,
+        endSec: savedSeg.endSec,
+        sanitized: savedSeg.sanitized,
+      });
+      continue;
+    }
+
+    if (partResults.length > resumedCount) {
       await new Promise((r) => window.setTimeout(r, 750));
       if (signal?.aborted) throw new Error('ABORTED');
     }
 
-    const seg = segments[i];
-    const isGeminiPin = pinnedModel && !pinnedModel.includes(':');
+    const isHealthyGeminiPin =
+      pinnedModel && !pinnedModel.includes(':') && !isModelCooledDown(pinnedModel);
+
     try {
-      const resSeg = await runSegment(seg, isGeminiPin ? pinnedModel : undefined, false);
+      const resSeg = await runSegment(seg, isHealthyGeminiPin ? pinnedModel : undefined, false);
       if (resSeg.successfulModel && !resSeg.successfulModel.includes(':')) {
         pinnedModel = resSeg.successfulModel;
       } else if (!pinnedModel) {
         pinnedModel = resSeg.successfulModel;
       }
+      checkpointMap.set(seg.index, {
+        index: seg.index,
+        startSec: resSeg.startSec,
+        endSec: resSeg.endSec,
+        successfulModel: resSeg.successfulModel,
+        sanitized: resSeg.sanitized,
+      });
       partResults.push({
         startSec: resSeg.startSec,
         endSec: resSeg.endSec,
@@ -1819,12 +1997,18 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
       });
     } catch (segErr: any) {
       if (String(segErr?.message || '') === 'ABORTED' || signal?.aborted) throw segErr;
-      // Adaptive ultra-compact retry (fewer/smaller frames, no heavy reference images) on transient 503/timeout
       if (isTransientOverloadError(segErr)) {
         try {
           await new Promise((r) => window.setTimeout(r, 1400));
           const retrySeg = await runSegment(seg, undefined, true);
           pinnedModel = pinnedModel || retrySeg.successfulModel;
+          checkpointMap.set(seg.index, {
+            index: seg.index,
+            startSec: retrySeg.startSec,
+            endSec: retrySeg.endSec,
+            successfulModel: retrySeg.successfulModel,
+            sanitized: retrySeg.sanitized,
+          });
           partResults.push({
             startSec: retrySeg.startSec,
             endSec: retrySeg.endSec,
@@ -1846,8 +2030,11 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
     throw lastSegErr || new Error('Nenhuma parte do vídeo pôde ser analisada (erro 503 / servidor ocupado).');
   }
 
-  if (failedSegments.length > 0) {
-    partialWarning = `Partes concluídas: ${partResults.length}/${segments.length} (${failedSegments.join(', ')} sem resposta: ${formatClientGeminiError(lastSegErr)})`;
+  // Clear checkpoint once ALL parts succeeded; preserve partial checkpoint if any part failed so user can resume!
+  if (failedSegments.length === 0) {
+    segmentCheckpointStore.delete(checkpointKey);
+  } else {
+    partialWarning = `Partes concluídas: ${partResults.length}/${segments.length} (${failedSegments.join(', ')} pendentes: ${formatClientGeminiError(lastSegErr)}). As partes já concluídas ficaram salvas — clique em "Continuar Partes Restantes" ou troque de IA para terminar sem refazer do zero!`;
   }
 
   const merged = mergeClientPartAnalyses(
@@ -1865,5 +2052,9 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
   return {
     ...merged,
     modelUsed: pinnedModel || 'multi-part-keyframes',
+    totalExpectedParts: segments.length,
+    completedPartsCount: partResults.length,
+    pendingPartsCount: failedSegments.length,
+    resumedPartsCount: resumedCount,
   };
 }

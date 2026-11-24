@@ -36184,6 +36184,31 @@ function mergeClientPartAnalyses(partResults, totalDurationSec, hasGabarito, tra
 		gabaritoWarning: hasGabarito ? void 0 : "Análise feita sem fotos de gabarito (apenas com o Livro de Regras BIOGLOW). Confira e corrija qualquer erro antes de salvar."
 	};
 }
+var segmentCheckpointStore = /* @__PURE__ */ new Map();
+var frameCacheStore = /* @__PURE__ */ new Map();
+function buildVideoCheckpointBaseKey(file, informedMissions) {
+	const cleaned = informedMissions.map((c) => c.trim().toUpperCase()).filter(Boolean).sort().join(",");
+	return `${file.name}|${file.size}|${file.lastModified}|${cleaned}`;
+}
+function getVideoAnalysisCheckpoint(file, informedMissions) {
+	if (!file) return null;
+	const prefix = `${buildVideoCheckpointBaseKey(file, informedMissions)}|`;
+	for (const [key, entry] of segmentCheckpointStore.entries()) if (key.startsWith(prefix) && entry.segments.size > 0 && entry.segments.size < entry.totalParts) {
+		const completedIndices = Array.from(entry.segments.keys()).sort((a, b) => a - b);
+		return {
+			totalParts: entry.totalParts,
+			completedCount: completedIndices.length,
+			remainingCount: Math.max(0, entry.totalParts - completedIndices.length),
+			completedIndices
+		};
+	}
+	return null;
+}
+function clearVideoAnalysisCheckpoint(file, informedMissions) {
+	if (!file) return;
+	const prefix = informedMissions ? `${buildVideoCheckpointBaseKey(file, informedMissions)}|` : `${file.name}|${file.size}|${file.lastModified}|`;
+	for (const key of Array.from(segmentCheckpointStore.keys())) if (key.startsWith(prefix)) segmentCheckpointStore.delete(key);
+}
 async function analyzeMediaClientSide(params) {
 	const { mediaFile, isVideo, informedMissions, references, trainingExamples, splitMode, apiKey, signal, onProgress } = params;
 	const cleanedInformed = informedMissions.map((c) => c.trim().toUpperCase()).filter(Boolean);
@@ -36288,6 +36313,15 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
     }
   ]
 }`;
+	const modelCooldownUntil = /* @__PURE__ */ new Map();
+	let stickyThirdPartyRoute = null;
+	const isModelCooledDown = (key) => (modelCooldownUntil.get(key) || 0) > Date.now();
+	const markModelCooldown = (key, err) => {
+		const msg = extractGeminiErrorText(err).toLowerCase();
+		const isQuotaOr429 = msg.includes("429") || msg.includes("resource_exhausted") || msg.includes("quota") || msg.includes("rate limit");
+		const ms = msg.includes("404") || msg.includes("not_found") || msg.includes("does not exist") ? 18e4 : isQuotaOr429 ? 5e4 : 22e3;
+		modelCooldownUntil.set(key, Date.now() + ms);
+	};
 	const runOpenAiCompatibleVision = async (provider, providerKey, mediaParts, promptText, progressPct, stepLabel, skipReferences = false) => {
 		const endpoint = provider === "groq" ? "https://api.groq.com/openai/v1/chat/completions" : "https://openrouter.ai/api/v1/chat/completions";
 		let modelsToTry = [];
@@ -36295,6 +36329,10 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 			modelsToTry = (await discoverGroqVisionModels(providerKey)).models;
 			if (modelsToTry.length === 0) throw new Error("Sua conta Groq atual não possui nenhum modelo com suporte a imagem/visão habilitado (os antigos Llama 4 Vision foram descontinuados pelo Groq). Use OpenRouter Free ou Gemini.");
 		} else modelsToTry = await discoverOpenRouterVisionModels();
+		if (stickyThirdPartyRoute?.provider === provider) modelsToTry = [stickyThirdPartyRoute.model, ...modelsToTry.filter((m) => m !== stickyThirdPartyRoute.model)];
+		modelsToTry.sort((a, b) => {
+			return (isModelCooledDown(`${provider}:${a}`) ? 1 : 0) - (isModelCooledDown(`${provider}:${b}`) ? 1 : 0);
+		});
 		const contentItems = [];
 		const maxTotalImages = provider === "groq" ? 3 : 7;
 		const maxRefImagesForThirdParty = skipReferences ? 0 : provider === "groq" ? 0 : 2;
@@ -36375,13 +36413,20 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 				window.clearTimeout(timer);
 				const data = await res.json().catch(() => ({}));
 				if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
+				const parsedData = extractJsonObjectFromText(String(data?.choices?.[0]?.message?.content || ""));
+				stickyThirdPartyRoute = {
+					provider,
+					model: modelId
+				};
 				return {
-					parsedData: extractJsonObjectFromText(String(data?.choices?.[0]?.message?.content || "")),
+					parsedData,
 					successfulModel: `${provider}:${modelId}`
 				};
 			} catch (err) {
 				window.clearTimeout(timer);
 				lastThirdPartyErr = err;
+				markModelCooldown(`${provider}:${modelId}`, err);
+				if (stickyThirdPartyRoute?.provider === provider && stickyThirdPartyRoute.model === modelId) stickyThirdPartyRoute = null;
 				const msg = String(err?.message || "").toLowerCase();
 				if (msg.includes("401") || msg.includes("invalid api key") || msg.includes("unauthorized")) throw new Error(`Chave ${provider === "groq" ? "Groq" : "OpenRouter"} inválida. Confira na aba "Configurar IA".`);
 			}
@@ -36397,6 +36442,12 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 			if (effectiveOpenRouterKey && canSendToThirdParty) return runOpenAiCompatibleVision("openrouter", effectiveOpenRouterKey, mediaParts, promptText, progressPct, stepLabel, Boolean(opts.skipReferences));
 			throw new Error("Nenhuma chave de IA configurada. Adicione uma chave Gemini, Groq ou OpenRouter em \"Configurar IA\".");
 		}
+		if (effectiveProviderPref === "auto" && canSendToThirdParty && stickyThirdPartyRoute && !isModelCooledDown(`${stickyThirdPartyRoute.provider}:${stickyThirdPartyRoute.model}`)) {
+			const thirdKey = stickyThirdPartyRoute.provider === "groq" ? effectiveGroqKey : effectiveOpenRouterKey;
+			if (thirdKey) try {
+				return await runOpenAiCompatibleVision(stickyThirdPartyRoute.provider, thirdKey, mediaParts, promptText, progressPct, stepLabel, Boolean(opts.skipReferences));
+			} catch {}
+		}
 		const multiPartPreferredOrder = (name) => {
 			if (name === "gemini-3.1-flash-lite") return 0;
 			if (name === "gemini-2.5-flash-lite") return 1;
@@ -36409,17 +36460,19 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 			return 10 + scoreModelRank(name);
 		};
 		const basePoolForRun = (opts.isMultiPart || params.forceKeyframes) && !effectivePreferredGemini ? [...discoveredModels].sort((a, b) => multiPartPreferredOrder(a) - multiPartPreferredOrder(b)) : discoveredModels;
-		const startPool = opts.pinnedModel ? [opts.pinnedModel, ...basePoolForRun.filter((m) => m !== opts.pinnedModel)] : effectivePreferredGemini ? [effectivePreferredGemini, ...basePoolForRun.filter((m) => m !== effectivePreferredGemini)] : basePoolForRun;
+		const startPool = [...opts.pinnedModel ? [opts.pinnedModel, ...basePoolForRun.filter((m) => m !== opts.pinnedModel)] : effectivePreferredGemini ? [effectivePreferredGemini, ...basePoolForRun.filter((m) => m !== effectivePreferredGemini)] : basePoolForRun].sort((a, b) => {
+			return (isModelCooledDown(a) ? 1 : 0) - (isModelCooledDown(b) ? 1 : 0);
+		});
 		const filteredPool = mediaParts.some((p) => String(p?.inlineData?.mimeType || "").startsWith("video/")) ? startPool.filter((m) => !m.startsWith("gemma-")) : startPool;
 		const baseModels = Array.from(new Set(filteredPool)).slice(0, 6);
 		const activeRefParts = opts.skipReferences ? [] : opts.isMultiPart ? (() => {
 			const compact = [];
 			let imgCount = 0;
 			for (const rp of referenceParts) if (rp?.inlineData?.data) {
-				if (imgCount >= 3) continue;
+				if (imgCount >= 2) continue;
 				imgCount++;
 				compact.push(rp);
-			} else if (imgCount < 3) compact.push(rp);
+			} else if (imgCount < 2) compact.push(rp);
 			return compact;
 		})() : referenceParts;
 		const activeTrainParts = opts.skipReferences ? [] : trainingParts;
@@ -36532,13 +36585,14 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 				return await trySingleModel(modelCandidate, progressPct + i * 2, `${stepLabel} (${modelCandidate})...`);
 			} catch (err) {
 				lastErr = err;
+				markModelCooldown(modelCandidate, err);
 				const rawMsg = extractGeminiErrorText(err);
 				if (rawMsg.includes("API_KEY_INVALID") || rawMsg.includes("PERMISSION_DENIED")) break;
 				if (isTransientOverloadError(err)) {
 					sawTransient503 = true;
 					if (i < baseModels.length - 1) {
-						onProgress(Math.min(95, progressPct + i * 2 + 1), `Modelo ${modelCandidate} ocupado (503) — alternando para ${baseModels[i + 1]}...`);
-						await new Promise((r) => window.setTimeout(r, 1e3));
+						onProgress(Math.min(95, progressPct + i * 2 + 1), `Modelo ${modelCandidate} ocupado/limite — alternando para ${baseModels[i + 1]}...`);
+						await new Promise((r) => window.setTimeout(r, 800));
 					}
 				}
 			}
@@ -36623,14 +36677,27 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 			endSec
 		});
 	}
+	const checkpointKey = `${buildVideoCheckpointBaseKey(mediaFile, cleanedInformed)}|${partCount}`;
+	if (params.resetCheckpoint) segmentCheckpointStore.delete(checkpointKey);
+	const existingCheckpoint = segmentCheckpointStore.get(checkpointKey);
+	const checkpointMap = existingCheckpoint && existingCheckpoint.totalParts === partCount ? existingCheckpoint.segments : /* @__PURE__ */ new Map();
+	segmentCheckpointStore.set(checkpointKey, {
+		totalParts: partCount,
+		segments: checkpointMap
+	});
 	const partResults = [];
 	let pinnedModel = "";
 	let partialWarning = "";
 	const runSegment = async (seg, modelPin, compactRetry = false) => {
 		const label = `${formatSecShort(seg.startSec)}–${formatSecShort(seg.endSec)}`;
 		const basePct = 28 + Math.round(seg.index / segments.length * 62);
-		onProgress(basePct, compactRetry ? `Reenviando Parte ${seg.index + 1}/${segments.length} em modo ultra-leve (${label})...` : `Extraindo quadros Parte ${seg.index + 1}/${segments.length} (${label})...`);
-		const frames = await extractVideoSegmentKeyframes(mediaFile, seg.startSec, seg.endSec, compactRetry ? 4 : 6, signal, compactRetry ? 480 : 640, compactRetry ? .65 : .72);
+		const frameKey = `${checkpointKey}|${seg.index}|${compactRetry ? "compact" : "std"}`;
+		let frames = frameCacheStore.get(frameKey);
+		if (!frames || frames.length === 0) {
+			onProgress(basePct, compactRetry ? `Reenviando Parte ${seg.index + 1}/${segments.length} em modo ultra-leve (${label})...` : `Extraindo quadros Parte ${seg.index + 1}/${segments.length} (${label})...`);
+			frames = await extractVideoSegmentKeyframes(mediaFile, seg.startSec, seg.endSec, compactRetry ? 4 : 5, signal, compactRetry ? 448 : 512, compactRetry ? .62 : .68);
+			frameCacheStore.set(frameKey, frames);
+		}
 		const frameParts = [];
 		for (const f of frames) {
 			frameParts.push({ text: `[Quadro em ${formatSecShort(f.timestampSec)}]` });
@@ -36655,18 +36722,38 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 	};
 	const failedSegments = [];
 	let lastSegErr = null;
+	let resumedCount = 0;
 	for (let i = 0; i < segments.length; i++) {
 		if (signal?.aborted) throw new Error("ABORTED");
-		if (i > 0) {
+		const seg = segments[i];
+		const savedSeg = checkpointMap.get(seg.index);
+		if (savedSeg) {
+			resumedCount++;
+			if (!pinnedModel && savedSeg.successfulModel) pinnedModel = savedSeg.successfulModel;
+			onProgress(28 + Math.round((seg.index + 1) / segments.length * 62), `Parte ${seg.index + 1}/${segments.length} reaproveitada do checkpoint (${savedSeg.successfulModel})...`);
+			partResults.push({
+				startSec: savedSeg.startSec,
+				endSec: savedSeg.endSec,
+				sanitized: savedSeg.sanitized
+			});
+			continue;
+		}
+		if (partResults.length > resumedCount) {
 			await new Promise((r) => window.setTimeout(r, 750));
 			if (signal?.aborted) throw new Error("ABORTED");
 		}
-		const seg = segments[i];
-		const isGeminiPin = pinnedModel && !pinnedModel.includes(":");
+		const isHealthyGeminiPin = pinnedModel && !pinnedModel.includes(":") && !isModelCooledDown(pinnedModel);
 		try {
-			const resSeg = await runSegment(seg, isGeminiPin ? pinnedModel : void 0, false);
+			const resSeg = await runSegment(seg, isHealthyGeminiPin ? pinnedModel : void 0, false);
 			if (resSeg.successfulModel && !resSeg.successfulModel.includes(":")) pinnedModel = resSeg.successfulModel;
 			else if (!pinnedModel) pinnedModel = resSeg.successfulModel;
+			checkpointMap.set(seg.index, {
+				index: seg.index,
+				startSec: resSeg.startSec,
+				endSec: resSeg.endSec,
+				successfulModel: resSeg.successfulModel,
+				sanitized: resSeg.sanitized
+			});
 			partResults.push({
 				startSec: resSeg.startSec,
 				endSec: resSeg.endSec,
@@ -36678,6 +36765,13 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 				await new Promise((r) => window.setTimeout(r, 1400));
 				const retrySeg = await runSegment(seg, void 0, true);
 				pinnedModel = pinnedModel || retrySeg.successfulModel;
+				checkpointMap.set(seg.index, {
+					index: seg.index,
+					startSec: retrySeg.startSec,
+					endSec: retrySeg.endSec,
+					successfulModel: retrySeg.successfulModel,
+					sanitized: retrySeg.sanitized
+				});
 				partResults.push({
 					startSec: retrySeg.startSec,
 					endSec: retrySeg.endSec,
@@ -36693,12 +36787,17 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 		}
 	}
 	if (partResults.length === 0) throw lastSegErr || /* @__PURE__ */ new Error("Nenhuma parte do vídeo pôde ser analisada (erro 503 / servidor ocupado).");
-	if (failedSegments.length > 0) partialWarning = `Partes concluídas: ${partResults.length}/${segments.length} (${failedSegments.join(", ")} sem resposta: ${formatClientGeminiError(lastSegErr)})`;
+	if (failedSegments.length === 0) segmentCheckpointStore.delete(checkpointKey);
+	else partialWarning = `Partes concluídas: ${partResults.length}/${segments.length} (${failedSegments.join(", ")} pendentes: ${formatClientGeminiError(lastSegErr)}). As partes já concluídas ficaram salvas — clique em "Continuar Partes Restantes" ou troque de IA para terminar sem refazer do zero!`;
 	const merged = mergeClientPartAnalyses(partResults, effectiveDuration, hasGabarito, relevantTraining.length);
 	if (partialWarning) merged.gabaritoWarning = merged.gabaritoWarning ? `${partialWarning} · ${merged.gabaritoWarning}` : partialWarning;
 	return {
 		...merged,
-		modelUsed: pinnedModel || "multi-part-keyframes"
+		modelUsed: pinnedModel || "multi-part-keyframes",
+		totalExpectedParts: segments.length,
+		completedPartsCount: partResults.length,
+		pendingPartsCount: failedSegments.length,
+		resumedPartsCount: resumedCount
 	};
 }
 // src/components/SimpleVideoAnalysisView.tsx
@@ -36733,6 +36832,7 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 	const [analysisPercent, setAnalysisPercent] = (0, import_react.useState)(0);
 	const [elapsedSeconds, setElapsedSeconds] = (0, import_react.useState)(0);
 	const [lastErrorMsg, setLastErrorMsg] = (0, import_react.useState)(null);
+	const [checkpointTick, setCheckpointTick] = (0, import_react.useState)(0);
 	const [result, setResult] = (0, import_react.useState)(null);
 	const [originalAiMissions, setOriginalAiMissions] = (0, import_react.useState)([]);
 	const [editableMissions, setEditableMissions] = (0, import_react.useState)([]);
@@ -36760,6 +36860,7 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 	const isVeryShortClip = isVideo && videoDuration > 0 && videoDuration < 2.5;
 	const shouldSuggestTrim = isVideo && (mediaSizeMb > RECOMMEND_TRIM_MB || videoDuration > RECOMMEND_TRIM_SEC);
 	const editableScore = editableMissions.reduce((sum, m) => sum + (Number(m.estimatedScore) || 0), 0);
+	const activeCheckpoint = isVideo ? getVideoAnalysisCheckpoint(mediaFile, informedMissions) : null;
 	(0, import_react.useEffect)(() => {
 		return () => {
 			if (mediaPreviewUrl) URL.revokeObjectURL(mediaPreviewUrl);
@@ -37150,6 +37251,7 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 			providerPref: providerCfg.providerPref,
 			preferredGeminiModel: options?.overrideModel || providerCfg.preferredGeminiModel,
 			forceKeyframes: Boolean(options?.forceKeyframes) || autoKeyframesForLongOrSplit,
+			resetCheckpoint: Boolean(options?.resetCheckpoint),
 			signal: abortCtrl.signal,
 			onProgress: (pct, msg) => {
 				setAnalysisPercent(pct);
@@ -37393,6 +37495,7 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 			activeAbortRef.current = null;
 			activeJobIdRef.current = null;
 			setIsAnalyzing(false);
+			setCheckpointTick((t) => t + 1);
 		}
 	};
 	const handleSaveRound = () => {
@@ -38077,7 +38180,7 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 										});
 									},
 									className: "px-3 py-2 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-bold flex items-center gap-1.5",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Layers, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Analisar por Quadros (Anti-503)" })]
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Layers, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: activeCheckpoint ? `Continuar só ${activeCheckpoint.remainingCount} Parte(s) Restantes` : "Analisar por Quadros (Anti-503)" })]
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 									type: "button",
@@ -38087,7 +38190,7 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 										overrideModel: "gemma-3-27b-it"
 									}),
 									className: "px-3 py-2 rounded-xl bg-emerald-400/20 hover:bg-emerald-400/30 text-emerald-200 border border-emerald-400/30 text-xs font-semibold flex items-center gap-1.5",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Cpu, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Tentar c/ Gemma 3 / Flash-Lite" })]
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Cpu, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: activeCheckpoint ? `Continuar (${activeCheckpoint.remainingCount} rest.) c/ Gemma 3` : "Tentar c/ Gemma 3 / Flash-Lite" })]
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 									type: "button",
@@ -38166,6 +38269,42 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Key, { className: "w-3.5 h-3.5 text-amber-300" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Trocar Modelo / IA" })]
 						})]
 					}),
+					activeCheckpoint && !isAnalyzing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "rounded-2xl border border-cyan-400/30 bg-cyan-500/10 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-left",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "text-xs text-cyan-100",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "font-bold text-cyan-300",
+									children: [
+										"Progresso salvo (",
+										activeCheckpoint.completedCount,
+										"/",
+										activeCheckpoint.totalParts,
+										" partes):",
+										" "
+									]
+								}),
+								"Ao clicar abaixo ou trocar para OpenRouter/Gemma/Groq, vamos analisar",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [
+									"apenas as ",
+									activeCheckpoint.remainingCount,
+									" parte(s) que faltam"
+								] }),
+								" (sem recomeçar do zero)."
+							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							onClick: () => {
+								clearVideoAnalysisCheckpoint(mediaFile, informedMissions);
+								setCheckpointTick((t) => t + 1);
+								onShowToast("Checkpoint limpo — próxima análise começará do zero.", "info");
+							},
+							className: "shrink-0 self-start sm:self-center px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-[11px] text-slate-200 font-medium",
+							children: "Recomeçar do Zero"
+						})]
+					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "flex flex-col sm:flex-row gap-2.5",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -38177,7 +38316,7 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 								"Analisando (",
 								elapsedSeconds,
 								"s)..."
-							] })] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sparkles, { className: "w-4 h-4" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: !isAiReady ? "Conecte uma Chave de IA (Gemini, Groq ou OpenRouter)" : splitMode === "parts" && isVideo ? "Dividir em Partes e Analisar com IA" : "Analisar Vídeo com IA" })] })
+							] })] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sparkles, { className: "w-4 h-4" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: !isAiReady ? "Conecte uma Chave de IA (Gemini, Groq ou OpenRouter)" : activeCheckpoint ? `Continuar Só as ${activeCheckpoint.remainingCount} Partes Restantes (${activeCheckpoint.completedCount}/${activeCheckpoint.totalParts} já prontas)` : splitMode === "parts" && isVideo ? "Dividir em Partes e Analisar com IA" : "Analisar Vídeo com IA" })] })
 						}), mediaFile && !isAnalyzing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							type: "button",
 							onClick: startManualScoring,
@@ -38193,15 +38332,38 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 				className: "fd-panel rounded-3xl p-6 sm:p-7 space-y-6 fd-fade-up",
 				children: [
 					(result.usedGabarito === false || Boolean(result.gabaritoWarning)) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "rounded-2xl p-4 border border-amber-500/40 bg-amber-950/25 flex items-start gap-3 text-left",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldAlert, { className: "w-5 h-5 text-amber-300 shrink-0 mt-0.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "text-xs space-y-0.5",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-								className: "font-semibold text-amber-200",
-								children: result.usedGabarito === false ? "Análise sem gabarito — confira os pontos e corrija se houver erro" : "Aviso sobre a análise em partes"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-								className: "text-slate-300 leading-relaxed",
-								children: result.gabaritoWarning || "Análise feita apenas pelo Livro de Regras BIOGLOW. Confira os pontos abaixo."
+						className: "rounded-2xl p-4 border border-amber-500/40 bg-amber-950/25 flex flex-col gap-3 text-left",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex items-start gap-3",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldAlert, { className: "w-5 h-5 text-amber-300 shrink-0 mt-0.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "text-xs space-y-0.5",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+									className: "font-semibold text-amber-200",
+									children: result.pendingPartsCount && result.pendingPartsCount > 0 ? `Análise parcial (${result.completedPartsCount}/${result.totalExpectedParts} partes concluídas)` : result.usedGabarito === false ? "Análise sem gabarito — confira os pontos e corrija se houver erro" : "Aviso sobre a análise em partes"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+									className: "text-slate-300 leading-relaxed",
+									children: result.gabaritoWarning || "Análise feita apenas pelo Livro de Regras BIOGLOW. Confira os pontos abaixo."
+								})]
+							})]
+						}), activeCheckpoint && !isAnalyzing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex flex-wrap items-center gap-2 pl-8",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								onClick: () => void handleAnalyze({
+									overrideSplitMode: "parts",
+									forceKeyframes: true
+								}),
+								className: "px-3 py-1.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-bold flex items-center gap-1.5",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Layers, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+									"Continuar Só as ",
+									activeCheckpoint.remainingCount,
+									" Partes Restantes"
+								] })]
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								onClick: onNavigateToApi,
+								className: "px-3 py-1.5 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 border border-amber-400/30 text-amber-100 text-xs font-semibold flex items-center gap-1.5",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Key, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Trocar p/ Outra IA e Continuar" })]
 							})]
 						})]
 					}),

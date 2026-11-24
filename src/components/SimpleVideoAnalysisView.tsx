@@ -47,8 +47,10 @@ import { TEAM_DRIVE_GABARITO_URL } from '../data/teamConfig';
 import { validateMissionReference } from '../utils/folderParser';
 import {
   analyzeMediaClientSide,
+  clearVideoAnalysisCheckpoint,
   formatClientGeminiError,
   getSavedProviderConfig,
+  getVideoAnalysisCheckpoint,
   hasBackendServer,
   isTransientOverloadError,
 } from '../services/clientAiEngine';
@@ -95,6 +97,10 @@ interface AnalysisResultData {
   usedGabarito?: boolean;
   trainingRulesApplied?: number;
   partsAnalyzed?: number;
+  totalExpectedParts?: number;
+  completedPartsCount?: number;
+  pendingPartsCount?: number;
+  resumedPartsCount?: number;
   gabaritoWarning?: string;
 }
 
@@ -147,6 +153,7 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
   const [analysisPercent, setAnalysisPercent] = useState<number>(0);
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [lastErrorMsg, setLastErrorMsg] = useState<string | null>(null);
+  const [checkpointTick, setCheckpointTick] = useState<number>(0);
 
   const [result, setResult] = useState<AnalysisResultData | null>(null);
   const [originalAiMissions, setOriginalAiMissions] = useState<DetectedMissionItem[]>([]);
@@ -189,6 +196,12 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
     (sum, m) => sum + (Number(m.estimatedScore) || 0),
     0
   );
+
+  // Check if there are already completed video parts saved in memory checkpoint
+  void checkpointTick;
+  const activeCheckpoint = isVideo
+    ? getVideoAnalysisCheckpoint(mediaFile, informedMissions)
+    : null;
 
   // Revoke previous object URL on change/unmount
   useEffect(() => {
@@ -663,6 +676,7 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
     overrideSplitMode?: 'auto' | 'parts' | 'single';
     forceKeyframes?: boolean;
     overrideModel?: string;
+    resetCheckpoint?: boolean;
   }) => {
     const activeSplitMode = options?.overrideSplitMode || splitMode;
     const providerCfg = getSavedProviderConfig();
@@ -731,6 +745,7 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
         providerPref: providerCfg.providerPref,
         preferredGeminiModel: options?.overrideModel || providerCfg.preferredGeminiModel,
         forceKeyframes: Boolean(options?.forceKeyframes) || autoKeyframesForLongOrSplit,
+        resetCheckpoint: Boolean(options?.resetCheckpoint),
         signal: abortCtrl.signal,
         onProgress: (pct, msg) => {
           setAnalysisPercent(pct);
@@ -1104,6 +1119,7 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
       activeAbortRef.current = null;
       activeJobIdRef.current = null;
       setIsAnalyzing(false);
+      setCheckpointTick((t) => t + 1);
     }
   };
 
@@ -1909,7 +1925,11 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
                   className="px-3 py-2 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-bold flex items-center gap-1.5"
                 >
                   <Layers className="w-3.5 h-3.5" />
-                  <span>Analisar por Quadros (Anti-503)</span>
+                  <span>
+                    {activeCheckpoint
+                      ? `Continuar só ${activeCheckpoint.remainingCount} Parte(s) Restantes`
+                      : 'Analisar por Quadros (Anti-503)'}
+                  </span>
                 </button>
               )}
 
@@ -1925,7 +1945,11 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
                 className="px-3 py-2 rounded-xl bg-emerald-400/20 hover:bg-emerald-400/30 text-emerald-200 border border-emerald-400/30 text-xs font-semibold flex items-center gap-1.5"
               >
                 <Cpu className="w-3.5 h-3.5" />
-                <span>Tentar c/ Gemma 3 / Flash-Lite</span>
+                <span>
+                  {activeCheckpoint
+                    ? `Continuar (${activeCheckpoint.remainingCount} rest.) c/ Gemma 3`
+                    : 'Tentar c/ Gemma 3 / Flash-Lite'}
+                </span>
               </button>
 
               <button
@@ -1979,6 +2003,30 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
           </button>
         </div>
 
+        {/* Saved Checkpoint Resume Strip */}
+        {activeCheckpoint && !isAnalyzing && (
+          <div className="rounded-2xl border border-cyan-400/30 bg-cyan-500/10 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-left">
+            <div className="text-xs text-cyan-100">
+              <span className="font-bold text-cyan-300">
+                Progresso salvo ({activeCheckpoint.completedCount}/{activeCheckpoint.totalParts} partes):{' '}
+              </span>
+              Ao clicar abaixo ou trocar para OpenRouter/Gemma/Groq, vamos analisar{' '}
+              <strong>apenas as {activeCheckpoint.remainingCount} parte(s) que faltam</strong> (sem recomeçar do zero).
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                clearVideoAnalysisCheckpoint(mediaFile, informedMissions);
+                setCheckpointTick((t) => t + 1);
+                onShowToast('Checkpoint limpo — próxima análise começará do zero.', 'info');
+              }}
+              className="shrink-0 self-start sm:self-center px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-[11px] text-slate-200 font-medium"
+            >
+              Recomeçar do Zero
+            </button>
+          </div>
+        )}
+
         {/* Analyze Button + Instant Manual Alternative */}
         <div className="flex flex-col sm:flex-row gap-2.5">
           <button
@@ -2002,6 +2050,8 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
                 <span>
                   {!isAiReady
                     ? 'Conecte uma Chave de IA (Gemini, Groq ou OpenRouter)'
+                    : activeCheckpoint
+                    ? `Continuar Só as ${activeCheckpoint.remainingCount} Partes Restantes (${activeCheckpoint.completedCount}/${activeCheckpoint.totalParts} já prontas)`
                     : splitMode === 'parts' && isVideo
                     ? 'Dividir em Partes e Analisar com IA'
                     : 'Analisar Vídeo com IA'}
@@ -2029,19 +2079,46 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
         <div ref={resultsRef} className="fd-panel rounded-3xl p-6 sm:p-7 space-y-6 fd-fade-up">
           {/* Status / Accuracy / Partial-Parts Warning */}
           {(result.usedGabarito === false || Boolean(result.gabaritoWarning)) && (
-            <div className="rounded-2xl p-4 border border-amber-500/40 bg-amber-950/25 flex items-start gap-3 text-left">
-              <ShieldAlert className="w-5 h-5 text-amber-300 shrink-0 mt-0.5" />
-              <div className="text-xs space-y-0.5">
-                <p className="font-semibold text-amber-200">
-                  {result.usedGabarito === false
-                    ? 'Análise sem gabarito — confira os pontos e corrija se houver erro'
-                    : 'Aviso sobre a análise em partes'}
-                </p>
-                <p className="text-slate-300 leading-relaxed">
-                  {result.gabaritoWarning ||
-                    'Análise feita apenas pelo Livro de Regras BIOGLOW. Confira os pontos abaixo.'}
-                </p>
+            <div className="rounded-2xl p-4 border border-amber-500/40 bg-amber-950/25 flex flex-col gap-3 text-left">
+              <div className="flex items-start gap-3">
+                <ShieldAlert className="w-5 h-5 text-amber-300 shrink-0 mt-0.5" />
+                <div className="text-xs space-y-0.5">
+                  <p className="font-semibold text-amber-200">
+                    {result.pendingPartsCount && result.pendingPartsCount > 0
+                      ? `Análise parcial (${result.completedPartsCount}/${result.totalExpectedParts} partes concluídas)`
+                      : result.usedGabarito === false
+                      ? 'Análise sem gabarito — confira os pontos e corrija se houver erro'
+                      : 'Aviso sobre a análise em partes'}
+                  </p>
+                  <p className="text-slate-300 leading-relaxed">
+                    {result.gabaritoWarning ||
+                      'Análise feita apenas pelo Livro de Regras BIOGLOW. Confira os pontos abaixo.'}
+                  </p>
+                </div>
               </div>
+
+              {activeCheckpoint && !isAnalyzing && (
+                <div className="flex flex-wrap items-center gap-2 pl-8">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void handleAnalyze({ overrideSplitMode: 'parts', forceKeyframes: true })
+                    }
+                    className="px-3 py-1.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-bold flex items-center gap-1.5"
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>Continuar Só as {activeCheckpoint.remainingCount} Partes Restantes</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onNavigateToApi}
+                    className="px-3 py-1.5 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 border border-amber-400/30 text-amber-100 text-xs font-semibold flex items-center gap-1.5"
+                  >
+                    <Key className="w-3.5 h-3.5" />
+                    <span>Trocar p/ Outra IA e Continuar</span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
