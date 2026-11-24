@@ -8,6 +8,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDocs,
   onSnapshot,
   query,
   serverTimestamp,
@@ -33,6 +34,10 @@ const VALID_MISTAKE_TYPES = new Set([
   'other',
 ]);
 
+// Track actual Firestore document IDs by logical local ID so updates/deletes hit the exact doc
+const cloudRoundDocIdByLogicalId = new Map<string, string>();
+const cloudTrainingDocIdByLogicalId = new Map<string, string>();
+
 export function toSafeFirestoreId(rawId: string, prefix = 'item'): string {
   const cleaned = String(rawId || '')
     .replace(/[^a-zA-Z0-9_\-]/g, '_')
@@ -40,8 +45,23 @@ export function toSafeFirestoreId(rawId: string, prefix = 'item'): string {
   return cleaned.length > 0 ? cleaned : `${prefix}_${Date.now()}`;
 }
 
-function buildFirestoreRoundPayload(round: Round, ownerId: string) {
-  const safeId = toSafeFirestoreId(round.id, 'round');
+function getUidPrefix(uid: string): string {
+  return toSafeFirestoreId(uid, 'u').slice(0, 10);
+}
+
+function toUserScopedDocId(rawId: string, uid: string, prefix = 'item'): string {
+  const safeBase = toSafeFirestoreId(rawId, prefix);
+  const uidPrefix = getUidPrefix(uid);
+  const scoped = safeBase.startsWith(`${uidPrefix}_`) ? safeBase : `${uidPrefix}_${safeBase}`;
+  return scoped.slice(0, 128);
+}
+
+function toLogicalIdFromCloudId(cloudId: string, uid: string): string {
+  const uidPrefix = `${getUidPrefix(uid)}_`;
+  return cloudId.startsWith(uidPrefix) ? cloudId.slice(uidPrefix.length) : cloudId;
+}
+
+function buildFirestoreRoundPayload(round: Round, ownerId: string, docId: string) {
   const safeMissionResults = Array.isArray(round.missionResults)
     ? round.missionResults.slice(0, 20).map((mr) => ({
         missionId: String(mr.missionId || `m_${mr.missionCode || 'x'}`),
@@ -55,7 +75,7 @@ function buildFirestoreRoundPayload(round: Round, ownerId: string) {
     : [];
 
   return {
-    id: safeId,
+    id: docId,
     ownerId,
     roundNumber: Math.max(0, Math.min(100000, Number(round.roundNumber) || 0)),
     date: String(round.date || new Date().toISOString().slice(0, 16)).slice(0, 64),
@@ -72,12 +92,15 @@ function buildFirestoreRoundPayload(round: Round, ownerId: string) {
   };
 }
 
-function buildFirestoreTrainingPayload(ex: AiTrainingExample, ownerId: string) {
-  const safeId = toSafeFirestoreId(ex.id, 'train');
+function buildFirestoreTrainingPayload(
+  ex: AiTrainingExample,
+  ownerId: string,
+  docId: string
+) {
   const mistakeType = VALID_MISTAKE_TYPES.has(ex.mistakeType) ? ex.mistakeType : 'other';
 
   const basePayload: Record<string, any> = {
-    id: safeId,
+    id: docId,
     ownerId,
     missionCode: String(ex.missionCode || 'GERAL').toUpperCase().slice(0, 16),
     mistakeType,
@@ -100,10 +123,13 @@ function buildFirestoreTrainingPayload(ex: AiTrainingExample, ownerId: string) {
   return basePayload;
 }
 
-function mapFirestoreDocToRound(data: any): Round | null {
+function mapFirestoreDocToRound(data: any, uid: string): Round | null {
   if (!data || !data.id) return null;
+  const cloudId = String(data.id);
+  const logicalId = toLogicalIdFromCloudId(cloudId, uid);
+  cloudRoundDocIdByLogicalId.set(logicalId, cloudId);
   return {
-    id: String(data.id),
+    id: logicalId,
     roundNumber: Number(data.roundNumber) || 1,
     date: String(data.date || ''),
     operator: String(data.operator || 'Piloto FrancoDroid'),
@@ -117,10 +143,13 @@ function mapFirestoreDocToRound(data: any): Round | null {
   };
 }
 
-function mapFirestoreDocToTraining(data: any): AiTrainingExample | null {
+function mapFirestoreDocToTraining(data: any, uid: string): AiTrainingExample | null {
   if (!data || !data.id) return null;
+  const cloudId = String(data.id);
+  const logicalId = toLogicalIdFromCloudId(cloudId, uid);
+  cloudTrainingDocIdByLogicalId.set(logicalId, cloudId);
   return {
-    id: String(data.id),
+    id: logicalId,
     createdAt: String(data.ruleCreatedAtIso || new Date().toISOString()),
     missionCode: String(data.missionCode || 'GERAL'),
     mistakeType: VALID_MISTAKE_TYPES.has(data.mistakeType) ? data.mistakeType : 'other',
@@ -142,6 +171,8 @@ export const CloudSyncService = {
   },
 
   async signOutCloud(): Promise<void> {
+    cloudRoundDocIdByLogicalId.clear();
+    cloudTrainingDocIdByLogicalId.clear();
     await signOut(auth);
   },
 
@@ -244,10 +275,14 @@ export const CloudSyncService = {
     await this.pushRoundsToServer([newRound], StorageService.getDeletedRoundIds());
 
     if (user && user.emailVerified) {
-      const safeId = toSafeFirestoreId(newRound.id, 'round');
-      const path = `rounds/${safeId}`;
+      const docId = toUserScopedDocId(newRound.id, user.uid, 'round');
+      const path = `rounds/${docId}`;
       try {
-        await setDoc(doc(db, 'rounds', safeId), buildFirestoreRoundPayload(newRound, user.uid));
+        await setDoc(
+          doc(db, 'rounds', docId),
+          buildFirestoreRoundPayload(newRound, user.uid, docId)
+        );
+        cloudRoundDocIdByLogicalId.set(newRound.id, docId);
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, path);
       }
@@ -263,10 +298,12 @@ export const CloudSyncService = {
     }
 
     if (user && user.emailVerified) {
-      const safeId = toSafeFirestoreId(id, 'round');
-      const path = `rounds/${safeId}`;
+      const trackedDocId =
+        cloudRoundDocIdByLogicalId.get(id) || toUserScopedDocId(id, user.uid, 'round');
+      const path = `rounds/${trackedDocId}`;
       try {
-        await deleteDoc(doc(db, 'rounds', safeId));
+        await deleteDoc(doc(db, 'rounds', trackedDocId));
+        cloudRoundDocIdByLogicalId.delete(id);
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, path);
       }
@@ -294,14 +331,11 @@ export const CloudSyncService = {
       const res = await fetch('./api/ai/training', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ examples: newExamples }),
+        body: JSON.stringify({ examples: incomingExamples }),
       });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data?.error || 'Falha ao salvar correção.');
-      }
-      if (Array.isArray(data?.examples)) {
-        incomingExamples = data.examples;
       }
     }
 
@@ -309,15 +343,19 @@ export const CloudSyncService = {
     StorageService.saveAiTraining(merged);
 
     if (user && user.emailVerified) {
-      // Upload newest examples (top items from merged matching our batch) to Firestore
-      const toUpload = merged.slice(0, Math.max(newExamples.length + 2, 5));
-      for (const item of toUpload) {
-        const safeId = toSafeFirestoreId(item.id, 'train');
-        const path = `aiTraining/${safeId}`;
+      for (const item of incomingExamples) {
+        const existingDocId = cloudTrainingDocIdByLogicalId.get(item.id);
+        if (existingDocId) continue; // Already stored in Firestore with immutable createdAt
+        const docId = toUserScopedDocId(item.id, user.uid, 'train');
+        const path = `aiTraining/${docId}`;
         try {
-          await setDoc(doc(db, 'aiTraining', safeId), buildFirestoreTrainingPayload(item, user.uid));
+          await setDoc(
+            doc(db, 'aiTraining', docId),
+            buildFirestoreTrainingPayload(item, user.uid, docId)
+          );
+          cloudTrainingDocIdByLogicalId.set(item.id, docId);
         } catch (err) {
-          handleFirestoreError(err, OperationType.WRITE, path);
+          handleFirestoreError(err, OperationType.CREATE, path);
         }
       }
     }
@@ -334,10 +372,12 @@ export const CloudSyncService = {
     }
 
     if (user && user.emailVerified) {
-      const safeId = toSafeFirestoreId(id, 'train');
-      const path = `aiTraining/${safeId}`;
+      const trackedDocId =
+        cloudTrainingDocIdByLogicalId.get(id) || toUserScopedDocId(id, user.uid, 'train');
+      const path = `aiTraining/${trackedDocId}`;
       try {
-        await deleteDoc(doc(db, 'aiTraining', safeId));
+        await deleteDoc(doc(db, 'aiTraining', trackedDocId));
+        cloudTrainingDocIdByLogicalId.delete(id);
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, path);
       }
@@ -353,23 +393,66 @@ export const CloudSyncService = {
   ): Promise<void> {
     if (!user.emailVerified) return;
 
+    // Fetch existing user-owned docs first so we never re-run create on an existing document
+    const existingRoundLogicalIds = new Set<string>();
+    const existingTrainingLogicalIds = new Set<string>();
+
+    try {
+      const rSnap = await getDocs(
+        query(collection(db, 'rounds'), where('ownerId', '==', user.uid))
+      );
+      rSnap.docs.forEach((d) => {
+        const cloudId = String(d.data()?.id || d.id);
+        const logicalId = toLogicalIdFromCloudId(cloudId, user.uid);
+        existingRoundLogicalIds.add(logicalId);
+        cloudRoundDocIdByLogicalId.set(logicalId, cloudId);
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.LIST, 'rounds');
+    }
+
+    try {
+      const tSnap = await getDocs(
+        query(collection(db, 'aiTraining'), where('ownerId', '==', user.uid))
+      );
+      tSnap.docs.forEach((d) => {
+        const cloudId = String(d.data()?.id || d.id);
+        const logicalId = toLogicalIdFromCloudId(cloudId, user.uid);
+        existingTrainingLogicalIds.add(logicalId);
+        cloudTrainingDocIdByLogicalId.set(logicalId, cloudId);
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.LIST, 'aiTraining');
+    }
+
     for (const r of rounds) {
-      const safeId = toSafeFirestoreId(r.id, 'round');
-      const path = `rounds/${safeId}`;
+      if (existingRoundLogicalIds.has(r.id) || existingRoundLogicalIds.has(toSafeFirestoreId(r.id, 'round'))) {
+        continue;
+      }
+      const docId = toUserScopedDocId(r.id, user.uid, 'round');
+      const path = `rounds/${docId}`;
       try {
-        await setDoc(doc(db, 'rounds', safeId), buildFirestoreRoundPayload(r, user.uid));
+        await setDoc(doc(db, 'rounds', docId), buildFirestoreRoundPayload(r, user.uid, docId));
+        cloudRoundDocIdByLogicalId.set(r.id, docId);
       } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, path);
+        handleFirestoreError(err, OperationType.CREATE, path);
       }
     }
 
     for (const t of training) {
-      const safeId = toSafeFirestoreId(t.id, 'train');
-      const path = `aiTraining/${safeId}`;
+      if (
+        existingTrainingLogicalIds.has(t.id) ||
+        existingTrainingLogicalIds.has(toSafeFirestoreId(t.id, 'train'))
+      ) {
+        continue;
+      }
+      const docId = toUserScopedDocId(t.id, user.uid, 'train');
+      const path = `aiTraining/${docId}`;
       try {
-        await setDoc(doc(db, 'aiTraining', safeId), buildFirestoreTrainingPayload(t, user.uid));
+        await setDoc(doc(db, 'aiTraining', docId), buildFirestoreTrainingPayload(t, user.uid, docId));
+        cloudTrainingDocIdByLogicalId.set(t.id, docId);
       } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, path);
+        handleFirestoreError(err, OperationType.CREATE, path);
       }
     }
   },
@@ -394,12 +477,13 @@ export const CloudSyncService = {
       async (snapshot) => {
         const deletedIds = new Set(StorageService.getDeletedRoundIds());
         const cloudRounds: Round[] = [];
-        const cloudIds = new Set<string>();
+        const cloudLogicalIds = new Set<string>();
 
         snapshot.docs.forEach((d) => {
-          const mapped = mapFirestoreDocToRound(d.data());
+          const mapped = mapFirestoreDocToRound(d.data(), user.uid);
           if (mapped) {
-            cloudIds.add(mapped.id);
+            cloudLogicalIds.add(mapped.id);
+            cloudLogicalIds.add(toSafeFirestoreId(mapped.id, 'round'));
             if (!deletedIds.has(mapped.id)) {
               cloudRounds.push(mapped);
             }
@@ -408,9 +492,9 @@ export const CloudSyncService = {
 
         // Clean up any tombstoned items on Firestore
         for (const delId of deletedIds) {
-          const safeDel = toSafeFirestoreId(delId, 'round');
-          if (cloudIds.has(safeDel)) {
-            deleteDoc(doc(db, 'rounds', safeDel)).catch(() => {});
+          const trackedDoc = cloudRoundDocIdByLogicalId.get(delId);
+          if (trackedDoc && cloudLogicalIds.has(delId)) {
+            deleteDoc(doc(db, 'rounds', trackedDoc)).catch(() => {});
           }
         }
 
@@ -420,17 +504,26 @@ export const CloudSyncService = {
         callbacks.onRoundsSynced(merged);
         void this.pushRoundsToServer(merged, Array.from(deletedIds));
 
-        // Upload any local-only rounds to Firestore so nothing stays trapped locally
+        // Upload any local-only rounds to Firestore using UID-scoped document ID
         if (user.emailVerified) {
           for (const localItem of merged) {
-            const safeId = toSafeFirestoreId(localItem.id, 'round');
-            if (!cloudIds.has(safeId) && !uploadedRoundIds.has(safeId)) {
-              uploadedRoundIds.add(safeId);
-              const path = `rounds/${safeId}`;
+            const safeBase = toSafeFirestoreId(localItem.id, 'round');
+            if (
+              !cloudLogicalIds.has(localItem.id) &&
+              !cloudLogicalIds.has(safeBase) &&
+              !uploadedRoundIds.has(safeBase)
+            ) {
+              uploadedRoundIds.add(safeBase);
+              const docId = toUserScopedDocId(localItem.id, user.uid, 'round');
+              const path = `rounds/${docId}`;
               try {
-                await setDoc(doc(db, 'rounds', safeId), buildFirestoreRoundPayload(localItem, user.uid));
+                await setDoc(
+                  doc(db, 'rounds', docId),
+                  buildFirestoreRoundPayload(localItem, user.uid, docId)
+                );
+                cloudRoundDocIdByLogicalId.set(localItem.id, docId);
               } catch (err) {
-                handleFirestoreError(err, OperationType.WRITE, path);
+                handleFirestoreError(err, OperationType.CREATE, path);
               }
             }
           }
@@ -447,12 +540,13 @@ export const CloudSyncService = {
       async (snapshot) => {
         const deletedIds = new Set(StorageService.getDeletedTrainingIds());
         const cloudTraining: AiTrainingExample[] = [];
-        const cloudIds = new Set<string>();
+        const cloudLogicalIds = new Set<string>();
 
         snapshot.docs.forEach((d) => {
-          const mapped = mapFirestoreDocToTraining(d.data());
+          const mapped = mapFirestoreDocToTraining(d.data(), user.uid);
           if (mapped) {
-            cloudIds.add(mapped.id);
+            cloudLogicalIds.add(mapped.id);
+            cloudLogicalIds.add(toSafeFirestoreId(mapped.id, 'train'));
             if (!deletedIds.has(mapped.id)) {
               cloudTraining.push(mapped);
             }
@@ -460,9 +554,9 @@ export const CloudSyncService = {
         });
 
         for (const delId of deletedIds) {
-          const safeDel = toSafeFirestoreId(delId, 'train');
-          if (cloudIds.has(safeDel)) {
-            deleteDoc(doc(db, 'aiTraining', safeDel)).catch(() => {});
+          const trackedDoc = cloudTrainingDocIdByLogicalId.get(delId);
+          if (trackedDoc && cloudLogicalIds.has(delId)) {
+            deleteDoc(doc(db, 'aiTraining', trackedDoc)).catch(() => {});
           }
         }
 
@@ -474,17 +568,23 @@ export const CloudSyncService = {
 
         if (user.emailVerified) {
           for (const localItem of merged) {
-            const safeId = toSafeFirestoreId(localItem.id, 'train');
-            if (!cloudIds.has(safeId) && !uploadedTrainingIds.has(safeId)) {
-              uploadedTrainingIds.add(safeId);
-              const path = `aiTraining/${safeId}`;
+            const safeBase = toSafeFirestoreId(localItem.id, 'train');
+            if (
+              !cloudLogicalIds.has(localItem.id) &&
+              !cloudLogicalIds.has(safeBase) &&
+              !uploadedTrainingIds.has(safeBase)
+            ) {
+              uploadedTrainingIds.add(safeBase);
+              const docId = toUserScopedDocId(localItem.id, user.uid, 'train');
+              const path = `aiTraining/${docId}`;
               try {
                 await setDoc(
-                  doc(db, 'aiTraining', safeId),
-                  buildFirestoreTrainingPayload(localItem, user.uid)
+                  doc(db, 'aiTraining', docId),
+                  buildFirestoreTrainingPayload(localItem, user.uid, docId)
                 );
+                cloudTrainingDocIdByLogicalId.set(localItem.id, docId);
               } catch (err) {
-                handleFirestoreError(err, OperationType.WRITE, path);
+                handleFirestoreError(err, OperationType.CREATE, path);
               }
             }
           }
