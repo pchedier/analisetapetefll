@@ -35725,6 +35725,103 @@ async function discoverFlashModelsDirect(apiKey) {
 		return [...DEFAULT_FALLBACK_MODELS];
 	}
 }
+var GROQ_EXCLUDED_TEXT_ONLY = [
+	"whisper",
+	"tts",
+	"orpheus",
+	"guard",
+	"embed",
+	"compound",
+	"deepseek",
+	"llama-3.3",
+	"llama-3.1",
+	"llama3-",
+	"mixtral",
+	"gpt-oss",
+	"allam"
+];
+function scoreGroqVisionModel(modelObj) {
+	const id = String(modelObj?.id || "").toLowerCase();
+	if (!id || GROQ_EXCLUDED_TEXT_ONLY.some((kw) => id.includes(kw))) return -1;
+	const hasExplicitVisionFlag = modelObj?.vision === true || modelObj?.capabilities?.vision === true || Array.isArray(modelObj?.input_modalities) && modelObj.input_modalities.includes("image");
+	if (id === "qwen/qwen3.8-27b") return 1;
+	if (id.includes("qwen") && (id.includes("vl") || id.includes("3.8"))) return 2;
+	if (hasExplicitVisionFlag) return 3;
+	if (id.includes("vision") || id.includes("-vl") || id.includes("pixtral")) return 4;
+	if (id.includes("llama-4")) return 5;
+	if (id.includes("kimi") || id.includes("gemma-3")) return 6;
+	return -1;
+}
+async function discoverGroqVisionModels(apiKey) {
+	const fallback = ["qwen/qwen3.8-27b", "qwen/qwen3-vl-32b-instruct"];
+	try {
+		const ctrl = new AbortController();
+		const timer = window.setTimeout(() => ctrl.abort(), 6500);
+		const res = await fetch("https://api.groq.com/openai/v1/models", {
+			headers: { Authorization: `Bearer ${apiKey.trim()}` },
+			signal: ctrl.signal
+		});
+		window.clearTimeout(timer);
+		if (!res.ok) return {
+			models: fallback,
+			hasConfirmedVision: false
+		};
+		const data = await res.json().catch(() => ({}));
+		const scored = (Array.isArray(data?.data) ? data.data : []).filter((m) => m?.active !== false).map((m) => ({
+			id: String(m?.id || ""),
+			rank: scoreGroqVisionModel(m)
+		})).filter((x) => x.rank > 0 && x.id).sort((a, b) => a.rank - b.rank).map((x) => x.id);
+		const unique = Array.from(new Set(scored));
+		if (unique.length > 0) return {
+			models: unique.slice(0, 5),
+			hasConfirmedVision: true
+		};
+		return {
+			models: [],
+			hasConfirmedVision: false
+		};
+	} catch {
+		return {
+			models: fallback,
+			hasConfirmedVision: false
+		};
+	}
+}
+var cachedOpenRouterFreeVision = null;
+async function discoverOpenRouterVisionModels() {
+	const fallback = [
+		"google/gemma-3-27b-it:free",
+		"qwen/qwen2.5-vl-72b-instruct:free",
+		"qwen/qwen-2.5-vl-7b-instruct:free",
+		"nvidia/nemotron-nano-12b-v2-vl:free",
+		"openrouter/free"
+	];
+	if (cachedOpenRouterFreeVision && Date.now() - cachedOpenRouterFreeVision.ts < 3e5) return cachedOpenRouterFreeVision.models;
+	try {
+		const ctrl = new AbortController();
+		const timer = window.setTimeout(() => ctrl.abort(), 6500);
+		const res = await fetch("https://openrouter.ai/api/v1/models", { signal: ctrl.signal });
+		window.clearTimeout(timer);
+		if (!res.ok) return fallback;
+		const data = await res.json().catch(() => ({}));
+		const freeVision = (Array.isArray(data?.data) ? data.data : []).filter((m) => {
+			const id = String(m?.id || "");
+			const mods = Array.isArray(m?.architecture?.input_modalities) ? m.architecture.input_modalities : [];
+			return id.endsWith(":free") && mods.includes("image");
+		}).map((m) => String(m.id)).sort((a, b) => {
+			const rank = (id) => id.includes("gemma-3-27b") ? 0 : id.includes("qwen") && id.includes("vl") ? 1 : id.includes("gemma") ? 2 : 3;
+			return rank(a) - rank(b);
+		}).slice(0, 5);
+		const combined = Array.from(/* @__PURE__ */ new Set([...freeVision, "openrouter/free"]));
+		cachedOpenRouterFreeVision = {
+			ts: Date.now(),
+			models: combined
+		};
+		return combined;
+	} catch {
+		return fallback;
+	}
+}
 async function validateGroqKeyDirect(rawKey) {
 	const key = rawKey.trim();
 	if (!key || key.length < 16 || /\s/.test(key)) return {
@@ -35739,10 +35836,18 @@ async function validateGroqKeyDirect(rawKey) {
 			signal: ctrl.signal
 		});
 		window.clearTimeout(timer);
-		if (res.ok) return {
-			valid: true,
-			message: "Chave Groq conectada! Alternativa anti-503 pronta."
-		};
+		if (res.ok) {
+			const data = await res.json().catch(() => ({}));
+			const visionIds = (Array.isArray(data?.data) ? data.data : []).filter((m) => m?.active !== false && scoreGroqVisionModel(m) > 0).map((m) => String(m.id));
+			if (visionIds.length > 0) return {
+				valid: true,
+				message: `Chave Groq conectada! Modelo Vision ativo: ${visionIds[0]}.`
+			};
+			return {
+				valid: true,
+				message: "Chave Groq conectada! Atenção: sua conta Groq não listou modelos com Visão/Imagem no momento (recomenda-se ter também OpenRouter ou Gemini)."
+			};
+		}
 		return {
 			valid: false,
 			message: `Chave Groq recusada (HTTP ${res.status}). Confira em console.groq.com.`
@@ -35912,7 +36017,7 @@ function probeBrowserVideoDuration(file) {
 * Extracts crisp 720p JPEG keyframes with exact timestamps from a local File inside the browser.
 * Allows analyzing even large 60-100 MB videos on static GitHub Pages without FFmpeg!
 */
-async function extractVideoSegmentKeyframes(file, startSec, endSec, maxFrames = 10, signal) {
+async function extractVideoSegmentKeyframes(file, startSec, endSec, maxFrames = 7, signal, targetWidth = 640, jpegQuality = .72) {
 	return new Promise((resolve, reject) => {
 		const video = document.createElement("video");
 		video.muted = true;
@@ -35945,11 +36050,11 @@ async function extractVideoSegmentKeyframes(file, startSec, endSec, maxFrames = 
 				const safeDur = Math.max(1, video.duration || endSec || 30);
 				const clampedStart = Math.max(0, Math.min(startSec, safeDur - .5));
 				const span = Math.max(clampedStart + .5, Math.min(endSec, safeDur)) - clampedStart;
-				const targetCount = Math.max(3, Math.min(maxFrames, Math.ceil(span / 2.2) + 1));
+				const targetCount = Math.max(3, Math.min(maxFrames, Math.ceil(span / 2.5) + 1));
 				const step = targetCount > 1 ? span / (targetCount - 1) : 0;
 				const srcW = video.videoWidth || 640;
 				const srcH = video.videoHeight || 360;
-				const targetW = Math.min(720, srcW);
+				const targetW = Math.min(targetWidth, srcW);
 				const targetH = Math.max(2, Math.round(srcH * targetW / srcW));
 				const canvas = document.createElement("canvas");
 				canvas.width = targetW;
@@ -35969,7 +36074,7 @@ async function extractVideoSegmentKeyframes(file, startSec, endSec, maxFrames = 
 						window.setTimeout(resSeek, 900);
 					});
 					ctx.drawImage(video, 0, 0, targetW, targetH);
-					const b64 = canvas.toDataURL("image/jpeg", .76).split(";base64,")[1] || "";
+					const b64 = canvas.toDataURL("image/jpeg", jpegQuality).split(";base64,")[1] || "";
 					if (b64) frames.push({
 						timestampSec: t,
 						base64Data: b64
@@ -36183,41 +36288,42 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
     }
   ]
 }`;
-	const runOpenAiCompatibleVision = async (provider, providerKey, mediaParts, promptText, progressPct, stepLabel) => {
+	const runOpenAiCompatibleVision = async (provider, providerKey, mediaParts, promptText, progressPct, stepLabel, skipReferences = false) => {
 		const endpoint = provider === "groq" ? "https://api.groq.com/openai/v1/chat/completions" : "https://openrouter.ai/api/v1/chat/completions";
-		const modelsToTry = provider === "groq" ? ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct"] : [
-			"google/gemma-3-27b-it:free",
-			"qwen/qwen2.5-vl-72b-instruct:free",
-			"meta-llama/llama-4-scout:free",
-			"openrouter/free"
-		];
+		let modelsToTry = [];
+		if (provider === "groq") {
+			modelsToTry = (await discoverGroqVisionModels(providerKey)).models;
+			if (modelsToTry.length === 0) throw new Error("Sua conta Groq atual não possui nenhum modelo com suporte a imagem/visão habilitado (os antigos Llama 4 Vision foram descontinuados pelo Groq). Use OpenRouter Free ou Gemini.");
+		} else modelsToTry = await discoverOpenRouterVisionModels();
 		const contentItems = [];
-		const maxRefImagesForThirdParty = provider === "groq" ? 2 : 4;
+		const maxTotalImages = provider === "groq" ? 3 : 7;
+		const maxRefImagesForThirdParty = skipReferences ? 0 : provider === "groq" ? 0 : 2;
 		let refImgsAdded = 0;
 		contentItems.push({
 			type: "text",
 			text: `Você é um árbitro rigoroso da FLL (BIOGLOW). Códigos permitidos: [${allowedCodesList.join(", ")}].\n${JSON_SCHEMA_HINT}`
 		});
-		for (const p of [...referenceParts, ...trainingParts]) if (p?.text) contentItems.push({
-			type: "text",
-			text: p.text
-		});
-		else if (p?.inlineData?.data && refImgsAdded < maxRefImagesForThirdParty) {
-			refImgsAdded++;
-			contentItems.push({
-				type: "image_url",
-				image_url: { url: `data:${p.inlineData.mimeType || "image/jpeg"};base64,${p.inlineData.data}` }
+		if (!skipReferences) {
+			for (const p of [...referenceParts, ...trainingParts]) if (p?.text) contentItems.push({
+				type: "text",
+				text: p.text
 			});
+			else if (p?.inlineData?.data && refImgsAdded < maxRefImagesForThirdParty) {
+				refImgsAdded++;
+				contentItems.push({
+					type: "image_url",
+					image_url: { url: `data:${p.inlineData.mimeType || "image/jpeg"};base64,${p.inlineData.data}` }
+				});
+			}
 		}
 		contentItems.push({
 			type: "text",
 			text: "MÍDIA DO ROUND:"
 		});
-		let mediaImgsAdded = 0;
-		const maxMediaImgs = provider === "groq" ? 3 : 8;
+		const remainingImageBudget = Math.max(1, maxTotalImages - refImgsAdded);
 		const imageMediaParts = mediaParts.filter((p) => p?.inlineData?.data);
-		const stepSample = imageMediaParts.length > maxMediaImgs ? imageMediaParts.length / maxMediaImgs : 1;
-		if (imageMediaParts.length > maxMediaImgs) for (let k = 0; k < maxMediaImgs; k++) {
+		const stepSample = imageMediaParts.length > remainingImageBudget ? imageMediaParts.length / remainingImageBudget : 1;
+		if (imageMediaParts.length > remainingImageBudget) for (let k = 0; k < remainingImageBudget; k++) {
 			const imgP = imageMediaParts[Math.min(imageMediaParts.length - 1, Math.floor(k * stepSample))];
 			contentItems.push({
 				type: "image_url",
@@ -36228,13 +36334,10 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 			type: "text",
 			text: p.text
 		});
-		else if (p?.inlineData?.data && mediaImgsAdded < maxMediaImgs) {
-			mediaImgsAdded++;
-			contentItems.push({
-				type: "image_url",
-				image_url: { url: `data:${p.inlineData.mimeType || "image/jpeg"};base64,${p.inlineData.data}` }
-			});
-		}
+		else if (p?.inlineData?.data) contentItems.push({
+			type: "image_url",
+			image_url: { url: `data:${p.inlineData.mimeType || "image/jpeg"};base64,${p.inlineData.data}` }
+		});
 		contentItems.push({
 			type: "text",
 			text: promptText
@@ -36266,7 +36369,7 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 							content: contentItems
 						}],
 						temperature: .1,
-						max_tokens: 1800
+						max_tokens: 1600
 					})
 				});
 				window.clearTimeout(timer);
@@ -36287,19 +36390,42 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 	};
 	const runGeminiDirect = async (mediaParts, promptText, progressPct, stepLabel, opts = {}) => {
 		const canSendToThirdParty = opts.hasImageFramesOnly || mediaParts.every((p) => !p?.inlineData?.mimeType?.startsWith("video/"));
-		if (effectiveProviderPref === "groq" && effectiveGroqKey && canSendToThirdParty) return runOpenAiCompatibleVision("groq", effectiveGroqKey, mediaParts, promptText, progressPct, stepLabel);
-		if (effectiveProviderPref === "openrouter" && effectiveOpenRouterKey && canSendToThirdParty) return runOpenAiCompatibleVision("openrouter", effectiveOpenRouterKey, mediaParts, promptText, progressPct, stepLabel);
+		if (effectiveProviderPref === "groq" && effectiveGroqKey && canSendToThirdParty) return runOpenAiCompatibleVision("groq", effectiveGroqKey, mediaParts, promptText, progressPct, stepLabel, Boolean(opts.skipReferences));
+		if (effectiveProviderPref === "openrouter" && effectiveOpenRouterKey && canSendToThirdParty) return runOpenAiCompatibleVision("openrouter", effectiveOpenRouterKey, mediaParts, promptText, progressPct, stepLabel, Boolean(opts.skipReferences));
 		if (!aiClient) {
-			if (effectiveGroqKey && canSendToThirdParty) return runOpenAiCompatibleVision("groq", effectiveGroqKey, mediaParts, promptText, progressPct, stepLabel);
-			if (effectiveOpenRouterKey && canSendToThirdParty) return runOpenAiCompatibleVision("openrouter", effectiveOpenRouterKey, mediaParts, promptText, progressPct, stepLabel);
+			if (effectiveGroqKey && canSendToThirdParty) return runOpenAiCompatibleVision("groq", effectiveGroqKey, mediaParts, promptText, progressPct, stepLabel, Boolean(opts.skipReferences));
+			if (effectiveOpenRouterKey && canSendToThirdParty) return runOpenAiCompatibleVision("openrouter", effectiveOpenRouterKey, mediaParts, promptText, progressPct, stepLabel, Boolean(opts.skipReferences));
 			throw new Error("Nenhuma chave de IA configurada. Adicione uma chave Gemini, Groq ou OpenRouter em \"Configurar IA\".");
 		}
-		const startPool = opts.pinnedModel ? [opts.pinnedModel, ...discoveredModels.filter((m) => m !== opts.pinnedModel)] : effectivePreferredGemini ? [effectivePreferredGemini, ...discoveredModels.filter((m) => m !== effectivePreferredGemini)] : discoveredModels;
+		const multiPartPreferredOrder = (name) => {
+			if (name === "gemini-3.1-flash-lite") return 0;
+			if (name === "gemini-2.5-flash-lite") return 1;
+			if (name === "gemma-3-27b-it") return 2;
+			if (name === "gemini-3.8-flash") return 3;
+			if (name === "gemma-3-12b-it") return 4;
+			if (name === "gemini-3-flash" || name === "gemini-3-flash-preview") return 5;
+			if (name === "gemini-2.5-flash") return 6;
+			if (name === "gemini-4-hydrogen") return 7;
+			return 10 + scoreModelRank(name);
+		};
+		const basePoolForRun = (opts.isMultiPart || params.forceKeyframes) && !effectivePreferredGemini ? [...discoveredModels].sort((a, b) => multiPartPreferredOrder(a) - multiPartPreferredOrder(b)) : discoveredModels;
+		const startPool = opts.pinnedModel ? [opts.pinnedModel, ...basePoolForRun.filter((m) => m !== opts.pinnedModel)] : effectivePreferredGemini ? [effectivePreferredGemini, ...basePoolForRun.filter((m) => m !== effectivePreferredGemini)] : basePoolForRun;
 		const filteredPool = mediaParts.some((p) => String(p?.inlineData?.mimeType || "").startsWith("video/")) ? startPool.filter((m) => !m.startsWith("gemma-")) : startPool;
 		const baseModels = Array.from(new Set(filteredPool)).slice(0, 6);
+		const activeRefParts = opts.skipReferences ? [] : opts.isMultiPart ? (() => {
+			const compact = [];
+			let imgCount = 0;
+			for (const rp of referenceParts) if (rp?.inlineData?.data) {
+				if (imgCount >= 3) continue;
+				imgCount++;
+				compact.push(rp);
+			} else if (imgCount < 3) compact.push(rp);
+			return compact;
+		})() : referenceParts;
+		const activeTrainParts = opts.skipReferences ? [] : trainingParts;
 		const multimodalParts = [
-			...referenceParts,
-			...trainingParts,
+			...activeRefParts,
+			...activeTrainParts,
 			{ text: "MÍDIA DO ROUND:" },
 			...mediaParts,
 			{ text: promptText }
@@ -36371,8 +36497,8 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 				return cfg;
 			};
 			const partsForModel = isGemma ? [
-				...referenceParts,
-				...trainingParts,
+				...activeRefParts,
+				...activeTrainParts,
 				{ text: "MÍDIA DO ROUND:" },
 				...mediaParts,
 				{ text: `Você é um árbitro rigoroso da FLL (BIOGLOW). Códigos permitidos: [${allowedCodesList.join(", ")}].\n${promptText}\n${JSON_SCHEMA_HINT}` }
@@ -36500,11 +36626,11 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 	const partResults = [];
 	let pinnedModel = "";
 	let partialWarning = "";
-	const runSegment = async (seg, modelPin) => {
+	const runSegment = async (seg, modelPin, compactRetry = false) => {
 		const label = `${formatSecShort(seg.startSec)}–${formatSecShort(seg.endSec)}`;
 		const basePct = 28 + Math.round(seg.index / segments.length * 62);
-		onProgress(basePct, `Extraindo quadros Parte ${seg.index + 1}/${segments.length} (${label})...`);
-		const frames = await extractVideoSegmentKeyframes(mediaFile, seg.startSec, seg.endSec, 9, signal);
+		onProgress(basePct, compactRetry ? `Reenviando Parte ${seg.index + 1}/${segments.length} em modo ultra-leve (${label})...` : `Extraindo quadros Parte ${seg.index + 1}/${segments.length} (${label})...`);
+		const frames = await extractVideoSegmentKeyframes(mediaFile, seg.startSec, seg.endSec, compactRetry ? 4 : 6, signal, compactRetry ? 480 : 640, compactRetry ? .65 : .72);
 		const frameParts = [];
 		for (const f of frames) {
 			frameParts.push({ text: `[Quadro em ${formatSecShort(f.timestampSec)}]` });
@@ -36517,7 +36643,8 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 		const { parsedData, successfulModel } = await runGeminiDirect(frameParts, promptText, basePct + 6, `Analisando Parte ${seg.index + 1}/${segments.length} (${label})`, {
 			isMultiPart: true,
 			pinnedModel: modelPin,
-			hasImageFramesOnly: true
+			hasImageFramesOnly: true,
+			skipReferences: compactRetry
 		});
 		return {
 			startSec: seg.startSec,
@@ -36526,37 +36653,52 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 			sanitized: sanitizeClientAnalysisOutput(parsedData, allowedSanitizeList, hasGabarito, relevantTraining.length, cleanedInformed)
 		};
 	};
-	const first = await runSegment(segments[0]);
-	pinnedModel = first.successfulModel;
-	partResults.push({
-		startSec: first.startSec,
-		endSec: first.endSec,
-		sanitized: first.sanitized
-	});
-	for (let i = 1; i < segments.length; i += 2) {
+	const failedSegments = [];
+	let lastSegErr = null;
+	for (let i = 0; i < segments.length; i++) {
 		if (signal?.aborted) throw new Error("ABORTED");
-		const batch = segments.slice(i, i + 2);
-		const settled = await Promise.allSettled(batch.map((s) => runSegment(s, pinnedModel)));
-		let batchErr = null;
-		for (const outcome of settled) if (outcome.status === "fulfilled") {
-			const v = outcome.value;
+		if (i > 0) {
+			await new Promise((r) => window.setTimeout(r, 750));
+			if (signal?.aborted) throw new Error("ABORTED");
+		}
+		const seg = segments[i];
+		const isGeminiPin = pinnedModel && !pinnedModel.includes(":");
+		try {
+			const resSeg = await runSegment(seg, isGeminiPin ? pinnedModel : void 0, false);
+			if (resSeg.successfulModel && !resSeg.successfulModel.includes(":")) pinnedModel = resSeg.successfulModel;
+			else if (!pinnedModel) pinnedModel = resSeg.successfulModel;
 			partResults.push({
-				startSec: v.startSec,
-				endSec: v.endSec,
-				sanitized: v.sanitized
+				startSec: resSeg.startSec,
+				endSec: resSeg.endSec,
+				sanitized: resSeg.sanitized
 			});
-		} else if (!batchErr) batchErr = outcome.reason;
-		if (batchErr) {
-			if (String(batchErr?.message || "") === "ABORTED") throw batchErr;
-			partialWarning = `Partes analisadas: ${partResults.length}/${segments.length}. Uma parte seguinte foi interrompida: ${formatClientGeminiError(batchErr)}`;
-			break;
+		} catch (segErr) {
+			if (String(segErr?.message || "") === "ABORTED" || signal?.aborted) throw segErr;
+			if (isTransientOverloadError(segErr)) try {
+				await new Promise((r) => window.setTimeout(r, 1400));
+				const retrySeg = await runSegment(seg, void 0, true);
+				pinnedModel = pinnedModel || retrySeg.successfulModel;
+				partResults.push({
+					startSec: retrySeg.startSec,
+					endSec: retrySeg.endSec,
+					sanitized: retrySeg.sanitized
+				});
+				continue;
+			} catch (retryErr) {
+				if (String(retryErr?.message || "") === "ABORTED" || signal?.aborted) throw retryErr;
+				lastSegErr = retryErr;
+			}
+			else lastSegErr = segErr;
+			failedSegments.push(`Parte ${i + 1}`);
 		}
 	}
+	if (partResults.length === 0) throw lastSegErr || /* @__PURE__ */ new Error("Nenhuma parte do vídeo pôde ser analisada (erro 503 / servidor ocupado).");
+	if (failedSegments.length > 0) partialWarning = `Partes concluídas: ${partResults.length}/${segments.length} (${failedSegments.join(", ")} sem resposta: ${formatClientGeminiError(lastSegErr)})`;
 	const merged = mergeClientPartAnalyses(partResults, effectiveDuration, hasGabarito, relevantTraining.length);
-	if (partialWarning) merged.gabaritoWarning = partialWarning;
+	if (partialWarning) merged.gabaritoWarning = merged.gabaritoWarning ? `${partialWarning} · ${merged.gabaritoWarning}` : partialWarning;
 	return {
 		...merged,
-		modelUsed: pinnedModel
+		modelUsed: pinnedModel || "multi-part-keyframes"
 	};
 }
 // src/components/SimpleVideoAnalysisView.tsx
@@ -36993,6 +37135,7 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 		const elapsedTimer = setInterval(() => {
 			setElapsedSeconds(Math.floor((Date.now() - startTime) / 1e3));
 		}, 1e3);
+		const autoKeyframesForLongOrSplit = isVideo && (activeSplitMode === "parts" || activeSplitMode === "auto" && (videoDuration > 35 || mediaFile.size > 10485760));
 		const runClientEngine = () => analyzeMediaClientSide({
 			mediaFile,
 			isVideo,
@@ -37000,13 +37143,13 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 			informedMissions,
 			references,
 			trainingExamples,
-			splitMode: activeSplitMode,
+			splitMode: autoKeyframesForLongOrSplit ? "parts" : activeSplitMode,
 			apiKey: savedApiKey,
 			groqApiKey: providerCfg.groqKey,
 			openRouterApiKey: providerCfg.openRouterKey,
 			providerPref: providerCfg.providerPref,
 			preferredGeminiModel: options?.overrideModel || providerCfg.preferredGeminiModel,
-			forceKeyframes: options?.forceKeyframes,
+			forceKeyframes: Boolean(options?.forceKeyframes) || autoKeyframesForLongOrSplit,
 			signal: abortCtrl.signal,
 			onProgress: (pct, msg) => {
 				setAnalysisPercent(pct);
@@ -37015,8 +37158,19 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 		});
 		try {
 			let resData;
-			if (!await hasBackendServer() || Boolean(options?.forceKeyframes) || providerCfg.providerPref === "groq" || providerCfg.providerPref === "openrouter" || !savedApiKey) resData = await runClientEngine();
-			else {
+			const serverOnline = await hasBackendServer();
+			const shouldUseClientDirectly = !serverOnline || Boolean(options?.forceKeyframes) || autoKeyframesForLongOrSplit || providerCfg.providerPref === "groq" || providerCfg.providerPref === "openrouter" || !savedApiKey;
+			let runServerPath = !shouldUseClientDirectly;
+			if (shouldUseClientDirectly) try {
+				resData = await runClientEngine();
+			} catch (clientErr) {
+				const errTxt = String(clientErr?.message || "").toLowerCase();
+				if (serverOnline && savedApiKey && errTxt.includes("decodificar")) {
+					setAnalysisStep("Codec incompatível com o navegador — enviando vídeo ao servidor FFmpeg...");
+					runServerPath = true;
+				} else throw clientErr;
+			}
+			if (runServerPath) {
 				const scopeCodes = informedMissions.length > 0 ? informedMissions : BIOGLOW_OFFICIAL_MISSIONS.map((m) => m.code);
 				let includeInlineRefImages = false;
 				if (validGabaritoKeys.length > 0) try {
@@ -37211,6 +37365,7 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 					} else throw srvErr;
 				}
 			}
+			if (!resData) throw new Error("Não foi possível obter o resultado da análise.");
 			activeJobIdRef.current = null;
 			setAnalysisPercent(100);
 			setAnalysisStep("Análise concluída!");
@@ -64256,7 +64411,7 @@ var ApiSettingsView = ({ isAiReady = false, onShowToast, onApiKeySaved }) => {
 								className: "flex items-center gap-2",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "w-4 h-4 text-emerald-300" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "text-xs font-bold text-white",
-									children: "1. Groq Cloud (Llama 4 Vision — Grátis e Ultra-Rápido)"
+									children: "1. Groq Cloud (Vision Automático — Grátis e Ultra-Rápido)"
 								})]
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "flex items-center gap-3 text-xs",

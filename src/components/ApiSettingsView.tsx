@@ -431,7 +431,7 @@ export const ApiSettingsView: React.FC<ApiSettingsViewProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-emerald-300" />
-              <span className="text-xs font-bold text-white">1. Groq Cloud (Llama 4 Vision — Grátis e Ultra-Rápido)</span>
+              <span className="text-xs font-bold text-white">1. Groq Cloud (Vision Automático — Grátis e Ultra-Rápido)</span>
             </div>
             <div className="flex items-center gap-3 text-xs">
               <a

@@ -711,6 +711,11 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
       setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
     }, 1000);
 
+    const autoKeyframesForLongOrSplit =
+      isVideo &&
+      (activeSplitMode === 'parts' ||
+        (activeSplitMode === 'auto' && (videoDuration > 35 || mediaFile.size > 10 * 1024 * 1024)));
+
     const runClientEngine = () =>
       analyzeMediaClientSide({
         mediaFile,
@@ -719,13 +724,13 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
         informedMissions,
         references,
         trainingExamples,
-        splitMode: activeSplitMode,
+        splitMode: autoKeyframesForLongOrSplit ? 'parts' : activeSplitMode,
         apiKey: savedApiKey,
         groqApiKey: providerCfg.groqKey,
         openRouterApiKey: providerCfg.openRouterKey,
         providerPref: providerCfg.providerPref,
         preferredGeminiModel: options?.overrideModel || providerCfg.preferredGeminiModel,
-        forceKeyframes: options?.forceKeyframes,
+        forceKeyframes: Boolean(options?.forceKeyframes) || autoKeyframesForLongOrSplit,
         signal: abortCtrl.signal,
         onProgress: (pct, msg) => {
           setAnalysisPercent(pct);
@@ -734,18 +739,32 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
       });
 
     try {
-      let resData: AnalysisResultData;
+      let resData: AnalysisResultData | undefined;
       const serverOnline = await hasBackendServer();
       const shouldUseClientDirectly =
         !serverOnline ||
         Boolean(options?.forceKeyframes) ||
+        autoKeyframesForLongOrSplit ||
         providerCfg.providerPref === 'groq' ||
         providerCfg.providerPref === 'openrouter' ||
         !savedApiKey;
 
+      let runServerPath = !shouldUseClientDirectly;
       if (shouldUseClientDirectly) {
-        resData = await runClientEngine();
-      } else {
+        try {
+          resData = await runClientEngine();
+        } catch (clientErr: any) {
+          const errTxt = String(clientErr?.message || '').toLowerCase();
+          if (serverOnline && savedApiKey && errTxt.includes('decodificar')) {
+            setAnalysisStep('Codec incompatível com o navegador — enviando vídeo ao servidor FFmpeg...');
+            runServerPath = true;
+          } else {
+            throw clientErr;
+          }
+        }
+      }
+
+      if (runServerPath) {
       const scopeCodes =
         informedMissions.length > 0
           ? informedMissions
@@ -1041,6 +1060,10 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
           throw srvErr;
         }
       }
+      }
+
+      if (!resData) {
+        throw new Error('Não foi possível obter o resultado da análise.');
       }
 
       activeJobIdRef.current = null;

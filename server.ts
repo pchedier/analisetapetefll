@@ -1927,32 +1927,28 @@ DETALHES CRÍTICOS:
         lastModelUsed = firstRes.successfulModel;
         partResults.push(firstRes.result);
 
-        // Run remaining Parts 2..N in pairs (2x faster!) with pinned model & graceful partial recovery
+        // Run remaining Parts 2..N sequentially with brief cooldown to avoid concurrent 503/429 spikes on free keys
         const remainingSegments = segments.slice(1);
-        for (let b = 0; b < remainingSegments.length; b += 2) {
+        for (let b = 0; b < remainingSegments.length; b++) {
           if (analysisJobs.get(jobId)?.stage === 'cancelled') return null;
-          const batch = remainingSegments.slice(b, b + 2);
+          await new Promise((r) => setTimeout(r, 750));
+          if (analysisJobs.get(jobId)?.stage === 'cancelled') return null;
+
+          const seg = remainingSegments[b];
           updateJob({
             stage: 'analyzing_ai',
             progress: Math.min(92, 52 + Math.round(((b + 1) / segments.length) * 40)),
-            message: `Analisando Parte ${batch[0].index + 1}${
-              batch.length > 1 ? ` e ${batch[1].index + 1}` : ''
-            } de ${segments.length} (${lastModelUsed})...`,
+            message: `Analisando Parte ${seg.index + 1} de ${segments.length} (${lastModelUsed})...`,
           });
 
-          const batchOutcomes = await Promise.allSettled(
-            batch.map((seg) => processOneSegment(seg, lastModelUsed))
-          );
-
-          for (const outcome of batchOutcomes) {
-            if (outcome.status === 'fulfilled') {
-              lastModelUsed = outcome.value.successfulModel;
-              partResults.push(outcome.value.result);
-            } else {
-              const errMsg = formatFriendlyGeminiError(outcome.reason);
-              partialInterruptionMsg = `Partes analisadas: ${partResults.length}/${segments.length} (trecho interrompido: ${errMsg})`;
-              console.warn('[FrancoDroid AI] Parte falhou após partes anteriores:', errMsg);
-            }
+          try {
+            const segRes = await processOneSegment(seg, lastModelUsed);
+            lastModelUsed = segRes.successfulModel;
+            partResults.push(segRes.result);
+          } catch (segErr: any) {
+            const errMsg = formatFriendlyGeminiError(segErr);
+            partialInterruptionMsg = `Partes analisadas: ${partResults.length}/${segments.length} (trecho interrompido: ${errMsg})`;
+            console.warn('[FrancoDroid AI] Parte falhou após partes anteriores:', errMsg);
           }
         }
 
