@@ -35720,7 +35720,11 @@ async function discoverFlashModelsDirect(apiKey) {
 			return !EXCLUDED_MODEL_KEYWORDS.some((kw) => shortName.includes(kw));
 		}).map((m) => String(m.name).replace(/^models\//, ""));
 		const ranked = Array.from(new Set(valid)).sort((a, b) => scoreModelRank(a) - scoreModelRank(b));
-		return ranked.length > 0 ? ranked.slice(0, 6) : [...DEFAULT_FALLBACK_MODELS];
+		if (ranked.length === 0) return [...DEFAULT_FALLBACK_MODELS];
+		const topModels = ranked.slice(0, 6);
+		if (ranked.includes("gemma-3-27b-it") && !topModels.includes("gemma-3-27b-it")) topModels.push("gemma-3-27b-it");
+		if (ranked.includes("gemini-3.1-flash-lite") && !topModels.includes("gemini-3.1-flash-lite")) topModels.unshift("gemini-3.1-flash-lite");
+		return Array.from(new Set(topModels)).slice(0, 8);
 	} catch {
 		return [...DEFAULT_FALLBACK_MODELS];
 	}
@@ -36025,6 +36029,7 @@ async function extractVideoSegmentKeyframes(file, startSec, endSec, maxFrames = 
 		video.preload = "auto";
 		const objectUrl = URL.createObjectURL(file);
 		const frames = [];
+		let settled = false;
 		const cleanup = () => {
 			URL.revokeObjectURL(objectUrl);
 			video.removeAttribute("src");
@@ -36036,21 +36041,35 @@ async function extractVideoSegmentKeyframes(file, startSec, endSec, maxFrames = 
 			return;
 		}
 		const abortHandler = () => {
+			if (settled) return;
+			settled = true;
 			cleanup();
 			reject(/* @__PURE__ */ new Error("ABORTED"));
 		};
 		signal?.addEventListener("abort", abortHandler, { once: true });
+		const loadGuardTimer = window.setTimeout(() => {
+			if (settled) return;
+			settled = true;
+			signal?.removeEventListener("abort", abortHandler);
+			cleanup();
+			reject(/* @__PURE__ */ new Error("O navegador demorou para abrir este vídeo (>12s). Tente cortar ou converter para MP4 padrão."));
+		}, 12e3);
 		video.onerror = () => {
+			if (settled) return;
+			settled = true;
+			window.clearTimeout(loadGuardTimer);
 			signal?.removeEventListener("abort", abortHandler);
 			cleanup();
 			reject(/* @__PURE__ */ new Error("O navegador não conseguiu decodificar este vídeo. Tente converter para MP4 padrão."));
 		};
-		video.onloadeddata = async () => {
+		const runExtraction = async () => {
+			if (settled) return;
+			window.clearTimeout(loadGuardTimer);
 			try {
 				const safeDur = Math.max(1, video.duration || endSec || 30);
 				const clampedStart = Math.max(0, Math.min(startSec, safeDur - .5));
 				const span = Math.max(clampedStart + .5, Math.min(endSec, safeDur)) - clampedStart;
-				const targetCount = Math.max(3, Math.min(maxFrames, Math.ceil(span / 2.5) + 1));
+				const targetCount = Math.max(3, Math.min(maxFrames, Math.ceil(span / 2.2) + 1));
 				const step = targetCount > 1 ? span / (targetCount - 1) : 0;
 				const srcW = video.videoWidth || 640;
 				const srcH = video.videoHeight || 360;
@@ -36071,7 +36090,7 @@ async function extractVideoSegmentKeyframes(file, startSec, endSec, maxFrames = 
 						};
 						video.addEventListener("seeked", onSeeked, { once: true });
 						video.currentTime = t;
-						window.setTimeout(resSeek, 900);
+						window.setTimeout(resSeek, 750);
 					});
 					ctx.drawImage(video, 0, 0, targetW, targetH);
 					const b64 = canvas.toDataURL("image/jpeg", jpegQuality).split(";base64,")[1] || "";
@@ -36080,17 +36099,76 @@ async function extractVideoSegmentKeyframes(file, startSec, endSec, maxFrames = 
 						base64Data: b64
 					});
 				}
+				if (settled) return;
+				settled = true;
 				signal?.removeEventListener("abort", abortHandler);
 				cleanup();
 				resolve(frames);
 			} catch (err) {
+				if (settled) return;
+				settled = true;
 				signal?.removeEventListener("abort", abortHandler);
 				cleanup();
 				reject(err);
 			}
 		};
+		video.onloadeddata = () => {
+			runExtraction();
+		};
 		video.src = objectUrl;
+		if (video.readyState >= 2) runExtraction();
 	});
+}
+/**
+* Stitches a sequence of timestamped video frames into ONE single crisp timeline grid JPEG.
+* Drastically cuts token cost & request count so 60s+ videos run in 1 single API call across
+* Gemini Flash-Lite, Gemma 3, Groq Vision, and OpenRouter Free!
+*/
+async function stitchFramesIntoStoryboard(frames, cols = 3, cellWidth = 384, jpegQuality = .72) {
+	const count = frames.length;
+	const rows = Math.max(1, Math.ceil(count / cols));
+	const loadedImgs = await Promise.all(frames.map((f) => new Promise((resolve, reject) => {
+		const img = new Image();
+		img.onload = () => resolve({
+			img,
+			ts: formatSecShort(f.timestampSec)
+		});
+		img.onerror = () => reject(/* @__PURE__ */ new Error("Falha ao montar mosaico de quadros."));
+		img.src = `data:image/jpeg;base64,${f.base64Data}`;
+	})));
+	const firstImg = loadedImgs[0]?.img;
+	const aspect = firstImg && firstImg.naturalWidth > 0 ? firstImg.naturalHeight / firstImg.naturalWidth : 9 / 16;
+	const cellHeight = Math.max(120, Math.round(cellWidth * aspect));
+	const canvas = document.createElement("canvas");
+	canvas.width = cols * cellWidth;
+	canvas.height = rows * cellHeight;
+	const ctx = canvas.getContext("2d");
+	if (!ctx) throw new Error("Canvas indisponível para montar storyboard.");
+	ctx.fillStyle = "#070b14";
+	ctx.fillRect(0, 0, canvas.width, canvas.height);
+	const timestamps = [];
+	loadedImgs.forEach(({ img, ts }, idx) => {
+		const col = idx % cols;
+		const row = Math.floor(idx / cols);
+		const x = col * cellWidth;
+		const y = row * cellHeight;
+		ctx.drawImage(img, x, y, cellWidth, cellHeight);
+		ctx.strokeStyle = "rgba(34, 211, 238, 0.55)";
+		ctx.lineWidth = 2;
+		ctx.strokeRect(x + 1, y + 1, cellWidth - 2, cellHeight - 2);
+		const badgeText = `#${idx + 1} ${ts}`;
+		ctx.font = "bold 14px monospace";
+		const textW = ctx.measureText(badgeText).width;
+		ctx.fillStyle = "rgba(2, 6, 23, 0.84)";
+		ctx.fillRect(x + 6, y + 6, textW + 14, 22);
+		ctx.fillStyle = "#67e8f9";
+		ctx.fillText(badgeText, x + 13, y + 21);
+		timestamps.push(ts);
+	});
+	return {
+		base64Data: canvas.toDataURL("image/jpeg", jpegQuality).split(";base64,")[1] || "",
+		timestamps
+	};
 }
 function sanitizeClientAnalysisOutput(rawParsed, allowedMissions, hasGabarito, trainingRulesApplied, informedCodes) {
 	const missionMap = new Map(allowedMissions.map((m) => [m.code.toUpperCase(), m]));
@@ -36483,9 +36561,10 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 			...mediaParts,
 			{ text: promptText }
 		];
-		const perModelTimeoutMs = opts.isMultiPart ? 4e4 : 52e3;
+		const perModelTimeoutMs = opts.isMultiPart ? 35e3 : 45e3;
 		let lastErr = null;
 		let sawTransient503 = false;
+		const thirdPartyErrors = [];
 		const trySingleModel = async (modelCandidate, pct, label) => {
 			onProgress(Math.min(96, pct), label);
 			const isGemma = modelCandidate.startsWith("gemma-");
@@ -36592,20 +36671,24 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 					sawTransient503 = true;
 					if (i < baseModels.length - 1) {
 						onProgress(Math.min(95, progressPct + i * 2 + 1), `Modelo ${modelCandidate} ocupado/limite — alternando para ${baseModels[i + 1]}...`);
-						await new Promise((r) => window.setTimeout(r, 800));
+						await new Promise((r) => window.setTimeout(r, 400));
 					}
 				}
 			}
 		}
 		if (sawTransient503 && effectiveProviderPref === "auto" && canSendToThirdParty && !signal?.aborted) {
-			if (effectiveGroqKey) try {
-				onProgress(Math.min(95, progressPct + 4), "Gemini ocupado (503) — alternando para Groq Vision...");
-				return await runOpenAiCompatibleVision("groq", effectiveGroqKey, mediaParts, promptText, progressPct + 4, stepLabel);
-			} catch {}
 			if (effectiveOpenRouterKey) try {
 				onProgress(Math.min(95, progressPct + 4), "Gemini ocupado (503) — alternando para OpenRouter Vision...");
-				return await runOpenAiCompatibleVision("openrouter", effectiveOpenRouterKey, mediaParts, promptText, progressPct + 4, stepLabel);
-			} catch {}
+				return await runOpenAiCompatibleVision("openrouter", effectiveOpenRouterKey, mediaParts, promptText, progressPct + 4, stepLabel, Boolean(opts.skipReferences));
+			} catch (orErr) {
+				thirdPartyErrors.push(`OpenRouter: ${String(orErr?.message || "falhou")}`);
+			}
+			if (effectiveGroqKey) try {
+				onProgress(Math.min(95, progressPct + 4), "Alternando para Groq Vision...");
+				return await runOpenAiCompatibleVision("groq", effectiveGroqKey, mediaParts, promptText, progressPct + 4, stepLabel, Boolean(opts.skipReferences));
+			} catch (groqErr) {
+				thirdPartyErrors.push(`Groq: ${String(groqErr?.message || "falhou")}`);
+			}
 		}
 		if (sawTransient503 && !signal?.aborted && baseModels.length > 0) {
 			const retryQueue = [...baseModels].sort((a, b) => {
@@ -36621,11 +36704,13 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 					return await trySingleModel(retryModel, progressPct + 6 + j, `Tentando novamente (${retryModel})...`);
 				} catch (retryErr) {
 					lastErr = retryErr;
-					if (j < retryQueue.length - 1 && isTransientOverloadError(retryErr)) await new Promise((r) => window.setTimeout(r, 1200));
+					if (j < retryQueue.length - 1 && isTransientOverloadError(retryErr)) await new Promise((r) => window.setTimeout(r, 900));
 				}
 			}
 		}
-		throw new Error(formatClientGeminiError(lastErr));
+		const baseFormatted = formatClientGeminiError(lastErr);
+		if (thirdPartyErrors.length > 0) throw new Error(`${baseFormatted} (${thirdPartyErrors.join(" | ")})`);
+		throw new Error(baseFormatted);
 	};
 	const allowedSanitizeList = activeMissions.map((m) => ({
 		code: m.code,
@@ -36649,7 +36734,7 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 	const effectiveDuration = Math.max(2, probedDur || 30);
 	const fileMb = mediaFile.size / 1048576;
 	const usingThirdPartyDirect = effectiveProviderPref === "groq" || effectiveProviderPref === "openrouter" || !effectiveGeminiKey && (Boolean(effectiveGroqKey) || Boolean(effectiveOpenRouterKey));
-	if (!(Boolean(params.forceKeyframes) || usingThirdPartyDirect || splitMode === "parts" || fileMb > 12 || splitMode === "auto" && effectiveDuration > 40) && fileMb <= 12) try {
+	if (!(Boolean(params.forceKeyframes) || usingThirdPartyDirect || splitMode === "parts" || fileMb > 12 || effectiveDuration > 35) && fileMb <= 12) try {
 		onProgress(40, "Preparando vídeo direto para IA...");
 		const b64 = await fileToBase64Raw(mediaFile);
 		const { parsedData, successfulModel } = await runGeminiDirect([{ inlineData: {
@@ -36665,7 +36750,8 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 		if (!isTransientOverloadError(directErr)) throw directErr;
 		onProgress(35, "Envio MP4 congestionado (503). Extraindo quadros leves anti-503 automaticamente...");
 	}
-	const partCount = effectiveDuration <= 18 && params.forceKeyframes ? 1 : effectiveDuration <= 22 ? 2 : Math.min(4, Math.max(2, Math.ceil(effectiveDuration / 30)));
+	const maxParts = 3;
+	const partCount = splitMode === "single" ? 1 : splitMode === "parts" ? Math.min(maxParts, Math.max(2, Math.ceil(effectiveDuration / 80))) : effectiveDuration <= 75 ? 1 : Math.min(maxParts, Math.max(2, Math.ceil(effectiveDuration / 80)));
 	const segLen = effectiveDuration / partCount;
 	const segments = [];
 	for (let i = 0; i < partCount; i++) {
@@ -36691,23 +36777,25 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 	const runSegment = async (seg, modelPin, compactRetry = false) => {
 		const label = `${formatSecShort(seg.startSec)}–${formatSecShort(seg.endSec)}`;
 		const basePct = 28 + Math.round(seg.index / segments.length * 62);
-		const frameKey = `${checkpointKey}|${seg.index}|${compactRetry ? "compact" : "std"}`;
+		const frameKey = `${checkpointKey}|sb|${seg.index}|${compactRetry ? "compact" : "std"}`;
 		let frames = frameCacheStore.get(frameKey);
+		const isSingleShot = segments.length === 1;
+		const isLongSingleShot = isSingleShot && effectiveDuration > 75;
+		const frameTargetCount = compactRetry ? 6 : isLongSingleShot ? 12 : isSingleShot ? 9 : 6;
+		const gridCols = !compactRetry && isLongSingleShot ? 4 : 3;
+		const cellW = compactRetry ? 320 : isLongSingleShot ? 320 : 384;
 		if (!frames || frames.length === 0) {
-			onProgress(basePct, compactRetry ? `Reenviando Parte ${seg.index + 1}/${segments.length} em modo ultra-leve (${label})...` : `Extraindo quadros Parte ${seg.index + 1}/${segments.length} (${label})...`);
-			frames = await extractVideoSegmentKeyframes(mediaFile, seg.startSec, seg.endSec, compactRetry ? 4 : 5, signal, compactRetry ? 448 : 512, compactRetry ? .62 : .68);
+			onProgress(basePct, compactRetry ? `Compactando painel ultra-leve (${label})...` : isSingleShot ? `Montando painel com ${frameTargetCount} quadros do vídeo (${label})...` : `Montando painel Parte ${seg.index + 1}/${segments.length} (${label})...`);
+			frames = await extractVideoSegmentKeyframes(mediaFile, seg.startSec, seg.endSec, frameTargetCount, signal, compactRetry ? 320 : isLongSingleShot ? 340 : 420, compactRetry ? .64 : isLongSingleShot ? .68 : .72);
 			frameCacheStore.set(frameKey, frames);
 		}
-		const frameParts = [];
-		for (const f of frames) {
-			frameParts.push({ text: `[Quadro em ${formatSecShort(f.timestampSec)}]` });
-			frameParts.push({ inlineData: {
-				mimeType: "image/jpeg",
-				data: f.base64Data
-			} });
-		}
-		const promptText = buildPrompt(`Parte ${seg.index + 1}/${segments.length} (${label} de ${formatSecShort(effectiveDuration)}). Avalie apenas ações visíveis nestes quadros.`);
-		const { parsedData, successfulModel } = await runGeminiDirect(frameParts, promptText, basePct + 6, `Analisando Parte ${seg.index + 1}/${segments.length} (${label})`, {
+		const storyboard = await stitchFramesIntoStoryboard(frames, gridCols, cellW, compactRetry ? .65 : isLongSingleShot ? .68 : .72);
+		const frameParts = [{ text: `PAINEL CRONOLÓGICO DE ${frames.length} QUADROS EM ORDEM (${storyboard.timestamps.join(" -> ")}). Leia da esquerda para direita, de cima para baixo (#1 a #${frames.length}):` }, { inlineData: {
+			mimeType: "image/jpeg",
+			data: storyboard.base64Data
+		} }];
+		const promptText = buildPrompt(isSingleShot ? `Vídeo completo (${formatSecShort(effectiveDuration)}) em painel cronológico #1..#${frames.length}. Identifique missões alteradas ao longo da sequência.` : `Parte ${seg.index + 1}/${segments.length} (${label} de ${formatSecShort(effectiveDuration)}) em painel cronológico.`);
+		const { parsedData, successfulModel } = await runGeminiDirect(frameParts, promptText, basePct + 6, isSingleShot ? `Analisando vídeo (${formatSecShort(effectiveDuration)})` : `Analisando Parte ${seg.index + 1}/${segments.length} (${label})`, {
 			isMultiPart: true,
 			pinnedModel: modelPin,
 			hasImageFramesOnly: true,
@@ -36801,10 +36889,10 @@ RESPONDA ESTRITAMENTE COM UM ÚNICO OBJETO JSON VÁLIDO (sem markdown, sem comen
 	};
 }
 // src/components/SimpleVideoAnalysisView.tsx
-var MAX_UPLOAD_MB = 100;
+var MAX_UPLOAD_MB = 300;
 var CHUNK_SIZE_BYTES = 1048576;
-var RECOMMEND_TRIM_MB = 25;
-var RECOMMEND_TRIM_SEC = 65;
+var RECOMMEND_TRIM_MB = 60;
+var RECOMMEND_TRIM_SEC = 155;
 var formatSec = (sec) => {
 	const s = Math.max(0, Math.round(sec));
 	const m = Math.floor(s / 60);
@@ -37236,7 +37324,8 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 		const elapsedTimer = setInterval(() => {
 			setElapsedSeconds(Math.floor((Date.now() - startTime) / 1e3));
 		}, 1e3);
-		const autoKeyframesForLongOrSplit = isVideo && (activeSplitMode === "parts" || activeSplitMode === "auto" && (videoDuration > 35 || mediaFile.size > 10485760));
+		const autoKeyframesForLongOrSplit = isVideo && (activeSplitMode === "parts" || videoDuration > 25 || mediaFile.size > 8388608);
+		const effectiveClientSplitMode = activeSplitMode === "parts" || activeSplitMode === "auto" && videoDuration > 75 ? "parts" : activeSplitMode;
 		const runClientEngine = () => analyzeMediaClientSide({
 			mediaFile,
 			isVideo,
@@ -37244,7 +37333,7 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 			informedMissions,
 			references,
 			trainingExamples,
-			splitMode: autoKeyframesForLongOrSplit ? "parts" : activeSplitMode,
+			splitMode: effectiveClientSplitMode,
 			apiKey: savedApiKey,
 			groqApiKey: providerCfg.groqKey,
 			openRouterApiKey: providerCfg.openRouterKey,
@@ -37451,7 +37540,7 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 							informedMissions,
 							references,
 							trainingExamples,
-							splitMode: "parts",
+							splitMode: effectiveClientSplitMode,
 							apiKey: savedApiKey,
 							groqApiKey: providerCfg.groqKey,
 							openRouterApiKey: providerCfg.openRouterKey,
@@ -38034,7 +38123,7 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Layers, { className: "w-3.5 h-3.5 text-cyan-300" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Divisão de vídeo para IA" })]
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 										className: "text-[11px] text-slate-400 mt-0.5",
-										children: splitMode === "parts" ? "Divide automaticamente em trechos de ~25s, analisa cada parte e junta todos os pontos." : splitMode === "single" ? "Analisa em 1 bloco só (use apenas em vídeos curtos)." : "Automático: vídeos > 40s (ou se der limite) são divididos em partes e unidos no resultado."
+										children: splitMode === "parts" ? "Divide em 2–3 trechos com painel de quadros + checkpoint e junta todos os pontos." : splitMode === "single" ? "Analisa o vídeo inteiro em 1 única chamada (painel cronológico de até 12 quadros)." : "Automático: vídeos de até 1m15s rodam em 1 única chamada leve (painel 3×3); vídeos de 2 min+ dividem em 2 partes com checkpoint."
 									})]
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 									className: "flex items-center gap-1 shrink-0 bg-black/40 p-1 rounded-xl border border-white/10",

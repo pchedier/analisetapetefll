@@ -104,10 +104,10 @@ interface AnalysisResultData {
   gabaritoWarning?: string;
 }
 
-const MAX_UPLOAD_MB = 100;
+const MAX_UPLOAD_MB = 300;
 const CHUNK_SIZE_BYTES = 1024 * 1024; // 1 MB safe chunks bypass reverse proxy limits
-const RECOMMEND_TRIM_MB = 25;
-const RECOMMEND_TRIM_SEC = 65;
+const RECOMMEND_TRIM_MB = 60;
+const RECOMMEND_TRIM_SEC = 155;
 
 const formatSec = (sec: number): string => {
   const s = Math.max(0, Math.round(sec));
@@ -727,8 +727,12 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
 
     const autoKeyframesForLongOrSplit =
       isVideo &&
-      (activeSplitMode === 'parts' ||
-        (activeSplitMode === 'auto' && (videoDuration > 35 || mediaFile.size > 10 * 1024 * 1024)));
+      (activeSplitMode === 'parts' || videoDuration > 25 || mediaFile.size > 8 * 1024 * 1024);
+
+    const effectiveClientSplitMode: 'auto' | 'parts' | 'single' =
+      activeSplitMode === 'parts' || (activeSplitMode === 'auto' && videoDuration > 75)
+        ? 'parts'
+        : activeSplitMode;
 
     const runClientEngine = () =>
       analyzeMediaClientSide({
@@ -738,7 +742,7 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
         informedMissions,
         references,
         trainingExamples,
-        splitMode: autoKeyframesForLongOrSplit ? 'parts' : activeSplitMode,
+        splitMode: effectiveClientSplitMode,
         apiKey: savedApiKey,
         groqApiKey: providerCfg.groqKey,
         openRouterApiKey: providerCfg.openRouterKey,
@@ -1058,7 +1062,7 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
             informedMissions,
             references,
             trainingExamples,
-            splitMode: 'parts',
+            splitMode: effectiveClientSplitMode,
             apiKey: savedApiKey,
             groqApiKey: providerCfg.groqKey,
             openRouterApiKey: providerCfg.openRouterKey,
@@ -1752,10 +1756,10 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
                   </p>
                   <p className="text-[11px] text-slate-400 mt-0.5">
                     {splitMode === 'parts'
-                      ? 'Divide automaticamente em trechos de ~25s, analisa cada parte e junta todos os pontos.'
+                      ? 'Divide em 2–3 trechos com painel de quadros + checkpoint e junta todos os pontos.'
                       : splitMode === 'single'
-                      ? 'Analisa em 1 bloco só (use apenas em vídeos curtos).'
-                      : 'Automático: vídeos > 40s (ou se der limite) são divididos em partes e unidos no resultado.'}
+                      ? 'Analisa o vídeo inteiro em 1 única chamada (painel cronológico de até 12 quadros).'
+                      : 'Automático: vídeos de até 1m15s rodam em 1 única chamada leve (painel 3×3); vídeos de 2 min+ dividem em 2 partes com checkpoint.'}
                   </p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0 bg-black/40 p-1 rounded-xl border border-white/10">
