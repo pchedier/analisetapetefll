@@ -100739,4 +100739,18 @@ var ErrorBoundary = class extends import_react.Component {
 	}
 };
 // src/main.tsx
+if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+	let refreshing = false;
+	const hadController = Boolean(navigator.serviceWorker.controller);
+	navigator.serviceWorker.addEventListener("controllerchange", () => {
+		if (!hadController || refreshing) return;
+		refreshing = true;
+		window.location.reload();
+	});
+	navigator.serviceWorker.getRegistrations().then((regs) => {
+		regs.forEach((r) => {
+			r.update().catch(() => {});
+		});
+	}).catch(() => {});
+}
 (0, import_client.createRoot)(document.getElementById("root")).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ErrorBoundary, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {}) }));
