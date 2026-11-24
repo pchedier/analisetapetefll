@@ -6,6 +6,7 @@ import {
   parseSeconds,
   computeDashboardStats,
   computeMissionStats,
+  computeMissionEvolutionData,
   computeStrategyPerformance,
 } from './fllCalculations';
 import { MissionResult, Round, Mission } from '../types/fll';
@@ -138,4 +139,87 @@ test('computeMissionStats calculates per-mission success rates and averages', ()
   // M2: 1 failed + 1 completed out of 2 attempts = 50%
   assert.equal(m2Summary?.successRate, 50);
   assert.equal(m2Summary?.averageScoreObtained, 20);
+});
+
+test('computeMissionEvolutionData excludes rounds where mission did not appear or was not_attempted', () => {
+  const rounds: Round[] = [
+    {
+      id: 'r1',
+      roundNumber: 1,
+      date: '2026-11-01',
+      operator: 'Piloto',
+      strategy: 'A',
+      totalTimeSeconds: 100,
+      totalScore: 30,
+      createdAt: 1,
+      missionResults: [
+        { missionId: 'm_m01', missionCode: 'M01', status: 'completed', score: 30, attempts: 1, timeSpentSeconds: 20 },
+      ],
+    },
+    {
+      id: 'r2',
+      roundNumber: 2,
+      date: '2026-11-02',
+      operator: 'Piloto',
+      strategy: 'A',
+      totalTimeSeconds: 90,
+      totalScore: 20,
+      createdAt: 2,
+      missionResults: [
+        // M01 did NOT appear in Round 2 (only M05 was tested)
+        { missionId: 'm_m05', missionCode: 'M05', status: 'completed', score: 20, attempts: 1, timeSpentSeconds: 20 },
+      ],
+    },
+    {
+      id: 'r3',
+      roundNumber: 3,
+      date: '2026-11-03',
+      operator: 'Piloto',
+      strategy: 'A',
+      totalTimeSeconds: 110,
+      totalScore: 20,
+      createdAt: 3,
+      missionResults: [
+        { missionId: 'm_m01', missionCode: 'M01', status: 'not_attempted', score: 0, attempts: 0, timeSpentSeconds: 0 },
+        { missionId: 'm_m05', missionCode: 'M05', status: 'completed', score: 20, attempts: 1, timeSpentSeconds: 20 },
+      ],
+    },
+    {
+      id: 'r4',
+      roundNumber: 4,
+      date: '2026-11-04',
+      operator: 'Piloto',
+      strategy: 'A',
+      totalTimeSeconds: 115,
+      totalScore: 0,
+      createdAt: 4,
+      missionResults: [
+        // Explicitly attempted and failed -> keeps 0
+        { missionId: 'm_m01', missionCode: 'M01', status: 'failed', score: 0, attempts: 1, timeSpentSeconds: 15 },
+      ],
+    },
+    {
+      id: 'r5',
+      roundNumber: 5,
+      date: '2026-11-05',
+      operator: 'Piloto',
+      strategy: 'A',
+      totalTimeSeconds: 120,
+      totalScore: 20,
+      createdAt: 5,
+      missionResults: [
+        { missionId: 'm_m01', missionCode: 'm01', status: 'partial', score: 20, attempts: 1, timeSpentSeconds: 18 },
+      ],
+    },
+  ];
+
+  const m01Evolution = computeMissionEvolutionData(rounds, 'M01');
+  assert.deepEqual(m01Evolution, [
+    { round: 'R1', roundNumber: 1, pontos: 30, status: 'completed' },
+    { round: 'R4', roundNumber: 4, pontos: 0, status: 'failed' },
+    { round: 'R5', roundNumber: 5, pontos: 20, status: 'partial' },
+  ]);
+
+  const m09Evolution = computeMissionEvolutionData(rounds, 'M09');
+  assert.deepEqual(m09Evolution, []);
 });

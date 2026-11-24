@@ -1937,6 +1937,25 @@ export const SimpleVideoAnalysisView: React.FC<SimpleVideoAnalysisViewProps> = (
           </div>
         )}
 
+        {/* Permanent AI Availability / High-Demand Notice */}
+        <div className="rounded-2xl border border-amber-400/25 bg-amber-500/10 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-left">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-100/90 leading-relaxed">
+              <span className="font-semibold text-amber-200">Aviso sobre a IA: </span>
+              Os servidores podem apresentar erros de <strong className="text-amber-100">alta demanda (503)</strong> ou simplesmente não responder em alguns horários. Se falhar ou ficar lento, troque para um modelo <strong className="text-amber-100">Lite</strong> (<code className="text-amber-200">Gemini 3.1 Flash-Lite</code> / <code className="text-amber-200">Gemma 3</code>) ou use <strong className="text-amber-100">outra IA gratuita</strong> (<code className="text-amber-200">Groq</code> ou <code className="text-amber-200">OpenRouter</code>) em Configurar IA.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onNavigateToApi}
+            className="shrink-0 self-start sm:self-center px-3 py-1.5 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 border border-amber-400/35 text-amber-100 text-[11px] font-semibold transition-all flex items-center gap-1.5"
+          >
+            <Key className="w-3.5 h-3.5 text-amber-300" />
+            <span>Trocar Modelo / IA</span>
+          </button>
+        </div>
+
         {/* Analyze Button + Instant Manual Alternative */}
         <div className="flex flex-col sm:flex-row gap-2.5">
           <button

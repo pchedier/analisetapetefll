@@ -810,6 +810,10 @@
     height: calc(var(--spacing) * 16);
   }
 
+  .h-52 {
+    height: calc(var(--spacing) * 52);
+  }
+
   .h-60 {
     height: calc(var(--spacing) * 60);
   }
@@ -1308,6 +1312,16 @@
     border-style: dashed;
   }
 
+  .border-amber-400\/25 {
+    border-color: #fcbb0040;
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .border-amber-400\/25 {
+      border-color: color-mix(in oklab, var(--color-amber-400) 25%, transparent);
+    }
+  }
+
   .border-amber-400\/30 {
     border-color: #fcbb004d;
   }
@@ -1315,6 +1329,16 @@
   @supports (color: color-mix(in lab, red, red)) {
     .border-amber-400\/30 {
       border-color: color-mix(in oklab, var(--color-amber-400) 30%, transparent);
+    }
+  }
+
+  .border-amber-400\/35 {
+    border-color: #fcbb0059;
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .border-amber-400\/35 {
+      border-color: color-mix(in oklab, var(--color-amber-400) 35%, transparent);
     }
   }
 
@@ -1395,6 +1419,16 @@
   @supports (color: color-mix(in lab, red, red)) {
     .border-blue-700\/60 {
       border-color: color-mix(in oklab, var(--color-blue-700) 60%, transparent);
+    }
+  }
+
+  .border-cyan-400\/25 {
+    border-color: #00d2ef40;
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .border-cyan-400\/25 {
+      border-color: color-mix(in oklab, var(--color-cyan-400) 25%, transparent);
     }
   }
 
@@ -1563,6 +1597,16 @@
   @supports (color: color-mix(in lab, red, red)) {
     .border-cyan-800\/80 {
       border-color: color-mix(in oklab, var(--color-cyan-800) 80%, transparent);
+    }
+  }
+
+  .border-emerald-400\/25 {
+    border-color: #00d29440;
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .border-emerald-400\/25 {
+      border-color: color-mix(in oklab, var(--color-emerald-400) 25%, transparent);
     }
   }
 
@@ -1926,6 +1970,16 @@
 
   .bg-black {
     background-color: var(--color-black);
+  }
+
+  .bg-black\/20 {
+    background-color: #0003;
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .bg-black\/20 {
+      background-color: color-mix(in oklab, var(--color-black) 20%, transparent);
+    }
   }
 
   .bg-black\/35 {
@@ -3150,6 +3204,16 @@
 
   .text-amber-100 {
     color: var(--color-amber-100);
+  }
+
+  .text-amber-100\/90 {
+    color: #fef3c6e6;
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .text-amber-100\/90 {
+      color: color-mix(in oklab, var(--color-amber-100) 90%, transparent);
+    }
   }
 
   .text-amber-200 {

@@ -37956,6 +37956,62 @@ var SimpleVideoAnalysisView = ({ references, isAiReady = false, isLoadingDriveGa
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "rounded-2xl border border-amber-400/25 bg-amber-500/10 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-left",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex items-start gap-2.5",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TriangleAlert, { className: "w-4 h-4 text-amber-300 shrink-0 mt-0.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "text-xs text-amber-100/90 leading-relaxed",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "font-semibold text-amber-200",
+										children: "Aviso sobre a IA: "
+									}),
+									"Os servidores podem apresentar erros de ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
+										className: "text-amber-100",
+										children: "alta demanda (503)"
+									}),
+									" ou simplesmente não responder em alguns horários. Se falhar ou ficar lento, troque para um modelo ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
+										className: "text-amber-100",
+										children: "Lite"
+									}),
+									" (",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+										className: "text-amber-200",
+										children: "Gemini 3.1 Flash-Lite"
+									}),
+									" / ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+										className: "text-amber-200",
+										children: "Gemma 3"
+									}),
+									") ou use ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
+										className: "text-amber-100",
+										children: "outra IA gratuita"
+									}),
+									" (",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+										className: "text-amber-200",
+										children: "Groq"
+									}),
+									" ou ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+										className: "text-amber-200",
+										children: "OpenRouter"
+									}),
+									") em Configurar IA."
+								]
+							})]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
+							onClick: onNavigateToApi,
+							className: "shrink-0 self-start sm:self-center px-3 py-1.5 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 border border-amber-400/35 text-amber-100 text-[11px] font-semibold transition-all flex items-center gap-1.5",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Key, { className: "w-3.5 h-3.5 text-amber-300" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Trocar Modelo / IA" })]
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "flex flex-col sm:flex-row gap-2.5",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
@@ -63320,6 +63376,24 @@ function formatSeconds(seconds) {
 	const secs = Math.floor(seconds % 60);
 	return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 }
+/**
+* Builds per-round evolution points for a given mission code,
+* excluding rounds where the mission did not appear or was marked 'not_attempted'.
+*/
+function computeMissionEvolutionData(rounds, missionCode) {
+	const targetCode = (missionCode || "").trim().toUpperCase();
+	if (!targetCode || !Array.isArray(rounds) || rounds.length === 0) return [];
+	return [...rounds].sort((a, b) => a.roundNumber - b.roundNumber || a.createdAt - b.createdAt).flatMap((r) => {
+		const mr = r.missionResults?.find((m) => (m.missionCode || "").trim().toUpperCase() === targetCode);
+		if (!mr || mr.status === "not_attempted") return [];
+		return [{
+			round: `R${r.roundNumber}`,
+			roundNumber: r.roundNumber,
+			pontos: Number(mr.score) || 0,
+			status: mr.status
+		}];
+	});
+}
 // src/components/HistoryView.tsx
 var HistoryView = ({ rounds, missions, trainingCount = 0, cloudUserEmail = null, onConnectCloud, onDisconnectCloud, onImportBackup, onDeleteRound, onShowToast }) => {
 	const [searchTerm, setSearchTerm] = (0, import_react.useState)("");
@@ -63376,14 +63450,9 @@ var HistoryView = ({ rounds, missions, trainingCount = 0, cloudUserEmail = null,
 		});
 	};
 	const roundsToCompare = rounds.filter((r) => selectedForCompare.includes(r.id));
-	const missionEvolutionData = [...rounds].sort((a, b) => a.roundNumber - b.roundNumber).map((r) => {
-		const mr = r.missionResults?.find((m) => m.missionCode === selectedMissionCode);
-		return {
-			round: `R${r.roundNumber}`,
-			pontos: mr ? mr.score : 0,
-			status: mr ? mr.status : "not_attempted"
-		};
-	});
+	const missionEvolutionData = computeMissionEvolutionData(rounds, selectedMissionCode);
+	const missionAvgScore = missionEvolutionData.length > 0 ? Math.round(missionEvolutionData.reduce((acc, item) => acc + item.pontos, 0) / missionEvolutionData.length * 10) / 10 : 0;
+	const missionBestScore = missionEvolutionData.length > 0 ? Math.max(...missionEvolutionData.map((item) => item.pontos)) : 0;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "max-w-4xl mx-auto space-y-6 fd-fade-up",
 		children: [
@@ -63674,15 +63743,61 @@ var HistoryView = ({ rounds, missions, trainingCount = 0, cloudUserEmail = null,
 						}, m.code))
 					})]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "fd-panel rounded-2xl p-6",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
-						className: "text-xs font-semibold text-white mb-4",
-						children: [
-							"Desempenho da ",
-							selectedMissionCode,
-							" ao Longo dos Rounds"
-						]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "fd-panel rounded-2xl p-6 space-y-4",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex flex-col sm:flex-row sm:items-center justify-between gap-2",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+							className: "text-xs font-semibold text-white",
+							children: [
+								"Desempenho da ",
+								selectedMissionCode,
+								" ao Longo dos Rounds"
+							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "text-[11px] text-slate-400 mt-0.5",
+							children: [
+								"Exibe apenas os rounds em que a missão ",
+								selectedMissionCode,
+								" realmente apareceu (rounds sem essa missão não contam como 0)."
+							]
+						})] }), missionEvolutionData.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex flex-wrap items-center gap-2 text-[11px] font-mono shrink-0",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-slate-300",
+									children: ["Rounds: ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
+										className: "text-white",
+										children: missionEvolutionData.length
+									})]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "px-2.5 py-1 rounded-lg bg-cyan-500/10 border border-cyan-400/25 text-cyan-200",
+									children: ["Média: ", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [missionAvgScore, " pts"] })]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-400/25 text-emerald-200",
+									children: ["Máx: ", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [missionBestScore, " pts"] })]
+								})
+							]
+						})]
+					}), missionEvolutionData.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "h-52 flex flex-col items-center justify-center text-center rounded-xl border border-dashed border-white/10 bg-black/20 px-4",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "text-xs font-semibold text-slate-300",
+							children: [
+								"A missão ",
+								selectedMissionCode,
+								" não apareceu em nenhum round registrado."
+							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "text-[11px] text-slate-500 mt-1 max-w-md",
+							children: [
+								"Quando um round incluir ",
+								selectedMissionCode,
+								", os pontos aparecerão aqui sem contar rounds em que ela não foi executada."
+							]
+						})]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "h-60 w-full",
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResponsiveContainer, {
 							width: "100%",
@@ -63699,16 +63814,21 @@ var HistoryView = ({ rounds, missions, trainingCount = 0, cloudUserEmail = null,
 										stroke: "#64748b",
 										fontSize: 11
 									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tooltip, { contentStyle: {
-										backgroundColor: "rgba(15, 23, 39, 0.96)",
-										borderRadius: "12px",
-										border: "1px solid rgba(255,255,255,0.12)",
-										color: "#fff",
-										fontSize: "12px"
-									} }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tooltip, {
+										formatter: (value) => [`${Number(value) || 0} pts`, "Pontuação"],
+										labelFormatter: (label) => `Round ${String(label).replace(/^R/, "#")}`,
+										contentStyle: {
+											backgroundColor: "rgba(15, 23, 39, 0.96)",
+											borderRadius: "12px",
+											border: "1px solid rgba(255,255,255,0.12)",
+											color: "#fff",
+											fontSize: "12px"
+										}
+									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
 										type: "monotone",
 										dataKey: "pontos",
+										name: "Pontos",
 										stroke: "#22d3ee",
 										strokeWidth: 2.5,
 										dot: {

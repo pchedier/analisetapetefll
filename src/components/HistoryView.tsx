@@ -21,7 +21,7 @@ import {
   Tooltip,
 } from 'recharts';
 import { Round, Mission } from '../types/fll';
-import { formatSeconds } from '../utils/fllCalculations';
+import { formatSeconds, computeMissionEvolutionData } from '../utils/fllCalculations';
 import { StorageService } from '../services/storageService';
 
 interface HistoryViewProps {
@@ -118,16 +118,19 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
 
   const roundsToCompare = rounds.filter((r) => selectedForCompare.includes(r.id));
 
-  const missionEvolutionData = [...rounds]
-    .sort((a, b) => a.roundNumber - b.roundNumber)
-    .map((r) => {
-      const mr = r.missionResults?.find((m) => m.missionCode === selectedMissionCode);
-      return {
-        round: `R${r.roundNumber}`,
-        pontos: mr ? mr.score : 0,
-        status: mr ? mr.status : 'not_attempted',
-      };
-    });
+  const missionEvolutionData = computeMissionEvolutionData(rounds, selectedMissionCode);
+  const missionAvgScore =
+    missionEvolutionData.length > 0
+      ? Math.round(
+          (missionEvolutionData.reduce((acc, item) => acc + item.pontos, 0) /
+            missionEvolutionData.length) *
+            10
+        ) / 10
+      : 0;
+  const missionBestScore =
+    missionEvolutionData.length > 0
+      ? Math.max(...missionEvolutionData.map((item) => item.pontos))
+      : 0;
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 fd-fade-up">
@@ -452,34 +455,69 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             </div>
           </div>
 
-          <div className="fd-panel rounded-2xl p-6">
-            <h3 className="text-xs font-semibold text-white mb-4">
-              Desempenho da {selectedMissionCode} ao Longo dos Rounds
-            </h3>
-            <div className="h-60 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={missionEvolutionData}>
-                  <XAxis dataKey="round" stroke="#64748b" fontSize={11} />
-                  <YAxis stroke="#64748b" fontSize={11} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'rgba(15, 23, 39, 0.96)',
-                      borderRadius: '12px',
-                      border: '1px solid rgba(255,255,255,0.12)',
-                      color: '#fff',
-                      fontSize: '12px',
-                    }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="pontos"
-                    stroke="#22d3ee"
-                    strokeWidth={2.5}
-                    dot={{ fill: '#22d3ee', r: 4 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+          <div className="fd-panel rounded-2xl p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="text-xs font-semibold text-white">
+                  Desempenho da {selectedMissionCode} ao Longo dos Rounds
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Exibe apenas os rounds em que a missão {selectedMissionCode} realmente apareceu (rounds sem essa missão não contam como 0).
+                </p>
+              </div>
+              {missionEvolutionData.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono shrink-0">
+                  <span className="px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-slate-300">
+                    Rounds: <strong className="text-white">{missionEvolutionData.length}</strong>
+                  </span>
+                  <span className="px-2.5 py-1 rounded-lg bg-cyan-500/10 border border-cyan-400/25 text-cyan-200">
+                    Média: <strong>{missionAvgScore} pts</strong>
+                  </span>
+                  <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-400/25 text-emerald-200">
+                    Máx: <strong>{missionBestScore} pts</strong>
+                  </span>
+                </div>
+              )}
             </div>
+
+            {missionEvolutionData.length === 0 ? (
+              <div className="h-52 flex flex-col items-center justify-center text-center rounded-xl border border-dashed border-white/10 bg-black/20 px-4">
+                <p className="text-xs font-semibold text-slate-300">
+                  A missão {selectedMissionCode} não apareceu em nenhum round registrado.
+                </p>
+                <p className="text-[11px] text-slate-500 mt-1 max-w-md">
+                  Quando um round incluir {selectedMissionCode}, os pontos aparecerão aqui sem contar rounds em que ela não foi executada.
+                </p>
+              </div>
+            ) : (
+              <div className="h-60 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={missionEvolutionData}>
+                    <XAxis dataKey="round" stroke="#64748b" fontSize={11} />
+                    <YAxis stroke="#64748b" fontSize={11} />
+                    <Tooltip
+                      formatter={(value: unknown) => [`${Number(value) || 0} pts`, 'Pontuação']}
+                      labelFormatter={(label) => `Round ${String(label).replace(/^R/, '#')}`}
+                      contentStyle={{
+                        backgroundColor: 'rgba(15, 23, 39, 0.96)',
+                        borderRadius: '12px',
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        color: '#fff',
+                        fontSize: '12px',
+                      }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="pontos"
+                      name="Pontos"
+                      stroke="#22d3ee"
+                      strokeWidth={2.5}
+                      dot={{ fill: '#22d3ee', r: 4 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </div>
         </div>
       )}

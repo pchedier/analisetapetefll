@@ -138,8 +138,11 @@ export function computeMissionStats(missions: Mission[], rounds: Round[]): Missi
     let totalTime = 0;
 
     for (const round of rounds) {
+      const targetCode = mission.code.trim().toUpperCase();
       const result = round.missionResults?.find(
-        (mr) => mr.missionId === mission.id || mr.missionCode === mission.code
+        (mr) =>
+          mr.missionId === mission.id ||
+          (mr.missionCode || '').trim().toUpperCase() === targetCode
       );
       if (result) {
         if (result.status !== 'not_attempted') {
@@ -178,6 +181,44 @@ export function computeMissionStats(missions: Mission[], rounds: Round[]): Missi
       averageTimeSpent,
     };
   });
+}
+
+export interface MissionEvolutionPoint {
+  round: string;
+  roundNumber: number;
+  pontos: number;
+  status: MissionResult['status'];
+}
+
+/**
+ * Builds per-round evolution points for a given mission code,
+ * excluding rounds where the mission did not appear or was marked 'not_attempted'.
+ */
+export function computeMissionEvolutionData(
+  rounds: Round[],
+  missionCode: string
+): MissionEvolutionPoint[] {
+  const targetCode = (missionCode || '').trim().toUpperCase();
+  if (!targetCode || !Array.isArray(rounds) || rounds.length === 0) return [];
+
+  return [...rounds]
+    .sort((a, b) => (a.roundNumber - b.roundNumber) || (a.createdAt - b.createdAt))
+    .flatMap((r) => {
+      const mr = r.missionResults?.find(
+        (m) => (m.missionCode || '').trim().toUpperCase() === targetCode
+      );
+      if (!mr || mr.status === 'not_attempted') {
+        return [];
+      }
+      return [
+        {
+          round: `R${r.roundNumber}`,
+          roundNumber: r.roundNumber,
+          pontos: Number(mr.score) || 0,
+          status: mr.status,
+        },
+      ];
+    });
 }
 
 /**
